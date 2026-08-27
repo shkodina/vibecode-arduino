@@ -29,8 +29,26 @@
 #include <ESP8266WebServer.h>
 
 // --- настройки wifi ---
-const char* WIFI_IMYA = "ObiVanKiNobi";
-const char* WIFI_PAROL = "84843121026";
+//
+// Имя сети и пароль в коде НЕ хранятся, они приходят снаружи на этапе сборки
+// через определения компилятора WIFI_SSID и WIFI_PASS.
+// Как их передавать - смотри readme.md, раздел "Пароль от wifi".
+//
+// Если при сборке их не передали - сборка падает с ошибкой. Это сделано
+// специально: arduino-cli по умолчанию скрывает предупреждения компилятора,
+// поэтому обычный #warning остался бы незамеченным, и мы бы залили в плату
+// прошивку с пустым паролем, а выяснили это только по молчащему модулю.
+
+#ifndef WIFI_SSID
+#error "WIFI_SSID ne zadan. Sobiray cherez ./sborka.sh, smotri readme.md"
+#endif
+
+#ifndef WIFI_PASS
+#error "WIFI_PASS ne zadan. Sobiray cherez ./sborka.sh, smotri readme.md"
+#endif
+
+const char* WIFI_IMYA = WIFI_SSID;
+const char* WIFI_PAROL = WIFI_PASS;
 
 // --- настройки датчика ---
 const int NOZHKA_DATCHIKA = A0;

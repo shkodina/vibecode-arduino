@@ -116,14 +116,73 @@ arduino-cli core install esp8266:esp8266
 arduino-cli core list
 ```
 
-## Настройка перед сборкой
+## Пароль от wifi
 
-В начале скетча вписать пароль от своей сети:
+Пароля в коде нет и быть не должно: скетч в git, а пароль от домашней сети
+в git попадать не может. Имя сети и пароль приходят снаружи, на этапе сборки,
+через определения компилятора `WIFI_SSID` и `WIFI_PASS`.
 
-```cpp
-const char* WIFI_IMYA = "ObiVanKiNobi";
-const char* WIFI_PAROL = "";
+Если их не передать, сборка упадёт с понятной ошибкой:
+
+```text
+error: #error "WIFI_SSID ne zadan. Sobiray cherez ./sborka.sh, smotri readme.md"
 ```
+
+Сделано именно ошибкой, а не предупреждением, специально: `arduino-cli`
+по умолчанию скрывает предупреждения компилятора, поэтому обычный `#warning`
+остался бы незамеченным - и в плату уехала бы прошивка с пустым паролем.
+
+### Способ 1: скрипт сборки (так удобнее)
+
+Один раз завести себе файл настроек:
+
+```bash
+cp .env.primer .env
+nano .env          # вписать имя сети, пароль, порт и режим
+```
+
+Дальше собирать и заливать так:
+
+```bash
+./sborka.sh           # только собрать
+./sborka.sh zalit     # собрать и залить в плату
+```
+
+Скрипт сам подставит настройки в компилятор и проверит, что всё заполнено.
+Файл `.env` прописан в `.gitignore`, в репозиторий он не уедет.
+
+### Способ 2: руками через переменные окружения
+
+Если скрипт не нужен, можно передать всё напрямую. Экранирование кавычек
+обязательно: в коде это строки, а не числа.
+
+```bash
+export WIFI_SSID="MoyaSet"
+export WIFI_PASS="moy-parol"
+
+arduino-cli compile --fqbn esp8266:esp8266:nodemcuv2 \
+  --build-property "compiler.cpp.extra_flags=-DWIFI_SSID=\"$WIFI_SSID\" -DWIFI_PASS=\"$WIFI_PASS\"" \
+  .
+```
+
+Тот же флаг `--build-property` нужен и при `upload`, если заливать без
+предварительной сборки.
+
+Проверить, что пароль реально попал в прошивку, можно так:
+
+```bash
+arduino-cli compile --fqbn esp8266:esp8266:nodemcuv2 \
+  --build-property "compiler.cpp.extra_flags=-DWIFI_SSID=\"$WIFI_SSID\" -DWIFI_PASS=\"$WIFI_PASS\"" \
+  --output-dir /tmp/proverka .
+
+strings /tmp/proverka/*.bin | grep "$WIFI_PASS"
+```
+
+Честное предупреждение: этот способ **не** прячет пароль от того, у кого
+на руках сама плата. Пароль лежит в прошивке открытым текстом, и его видно
+командой `strings` выше. Задача тут другая - не пустить пароль в git.
+Настоящее сокрытие потребовало бы хранить пароль вне прошивки, например
+вводить его через страницу настройки при первом включении.
 
 ## Сборка и заливка
 
@@ -131,11 +190,22 @@ const char* WIFI_PAROL = "";
 Отдельного профиля под "v3" нет и не нужно: отличается только разводка пары
 пинов питания, прошивка та же.
 
+Проще всего через скрипт (он сам подставит пароль из `.env`):
+
 ```bash
 cd /home/blobby/home_cnf/xtmp-work-dir/vibecode-arduino/lolin-web-pulse
+./sborka.sh zalit
+```
+
+То же самое руками, если хочется видеть все шаги:
+
+```bash
+export WIFI_SSID="MoyaSet"
+export WIFI_PASS="moy-parol"
+NASTROYKI="compiler.cpp.extra_flags=-DWIFI_SSID=\"$WIFI_SSID\" -DWIFI_PASS=\"$WIFI_PASS\""
 
 # собрать
-arduino-cli compile --fqbn esp8266:esp8266:nodemcuv2 .
+arduino-cli compile --fqbn esp8266:esp8266:nodemcuv2 --build-property "$NASTROYKI" .
 
 # залить (порт подставить свой)
 arduino-cli upload -p /dev/ttyUSB0 --fqbn esp8266:esp8266:nodemcuv2 .
@@ -153,16 +223,36 @@ arduino-cli board list
 через Windows-овый `arduino-cli` (он лежит внутри Arduino IDE), вызывая его
 из WSL. Подробности и диагностика - в `READ-ME-NOTES/arduino/wsl.md`.
 
+Скрипт это умеет сам, надо только поставить в `.env`:
+
+```ini
+REZHIM=wsl
+PORT=COM4
+```
+
+Дальше как обычно:
+
+```bash
+./sborka.sh zalit
+```
+
+Скрипт скопирует скетч на диск C (с сетевыми путями виндовые программы
+работают плохо) и вызовет виндовый `arduino-cli.exe`.
+
+То же самое руками:
+
 ```bash
 CLI="/mnt/c/Program Files/Arduino IDE/resources/app/lib/backend/resources/arduino-cli.exe"
+NASTROYKI="compiler.cpp.extra_flags=-DWIFI_SSID=\"$WIFI_SSID\" -DWIFI_PASS=\"$WIFI_PASS\""
 
-# скетч надо положить на диск C: с UNC-путями Windows-овые тулзы работают плохо
 mkdir -p /mnt/c/Users/blobby/arduino-wsl/lolin-web-pulse
 cp lolin-web-pulse.ino /mnt/c/Users/blobby/arduino-wsl/lolin-web-pulse/
 
 cd /mnt/c
-"$CLI" compile --fqbn esp8266:esp8266:nodemcuv2 'C:\Users\blobby\arduino-wsl\lolin-web-pulse'
-"$CLI" upload -p COM4 --fqbn esp8266:esp8266:nodemcuv2 'C:\Users\blobby\arduino-wsl\lolin-web-pulse'
+"$CLI" compile --fqbn esp8266:esp8266:nodemcuv2 --build-property "$NASTROYKI" \
+  'C:\Users\blobby\arduino-wsl\lolin-web-pulse'
+"$CLI" upload -p COM4 --fqbn esp8266:esp8266:nodemcuv2 \
+  'C:\Users\blobby\arduino-wsl\lolin-web-pulse'
 ```
 
 ## Как смотреть консоль ком-порта
