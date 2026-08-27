@@ -57,9 +57,13 @@ const int NOZHKA_DATCHIKA = A0;
 const unsigned long PERIOD_CHTENIYA_MS = 5;
 
 // --- сглаживание сигнала ---
-// Быстрое сглаживание убирает шум АЦП, но оставляет форму удара.
-// Коэффициент 0.125 при шаге 5 мс даёт постоянную времени около 40 мс.
-const float ALFA_BYSTROGO = 0.125;
+// Сглаживание убирает шум АЦП, но оставляет форму удара.
+// Коэффициент 0.05 при шаге 5 мс даёт постоянную времени около 100 мс.
+// Пульс это примерно 1-1.5 Гц, а шум широкополосный, поэтому такое
+// сглаживание давит шум примерно в 1.6 раза, а волну почти не портит.
+// Ставили 40 мс - сигнал оказался слишком близко к шуму, и детектор
+// начинал ловить шум и упираться в защитный минимум 350 мс (это ~170 уд/мин).
+const float ALFA_BYSTROGO = 0.05;
 
 // Базовая линия - это медленное среднее, то есть уровень без пульсаций.
 // Коэффициент 0.0033 даёт постоянную времени около 1.5 секунды.
@@ -80,8 +84,11 @@ const float ALFA_SILY = 0.00167;
 const float PREDEL_VYBROSA = 4.0;
 
 // Если сила волны меньше этого - считаем, что пальца нет.
-// Настоящий пульс даёт около 5-8, шум сглаженного сигнала меньше 1.
-const float MIN_SILA = 2.0;
+// Замеряли: палец лежит спокойно - сила 2.3-3.0 (пики волны до 7),
+// пальца нет - меньше 0.5. Порог 1.0 держится посередине.
+// Раньше стояло 2.0, и это было вплотную к рабочему уровню:
+// сила чуть колебалась и модуль постоянно терял палец.
+const float MIN_SILA = 1.0;
 
 // Порог срабатывания, в долях от силы волны.
 // Для ровной волны пик примерно в 1.4 раза больше силы, поэтому 0.9 -
@@ -110,6 +117,17 @@ const int SKOLKO_PROMEZHUTKOV_USREDNYAT = 5;
 // из-за которого пульс показывался вдвое больше настоящего.
 const float MIN_DOLYA_OT_SREDNEGO = 0.55;
 
+// Промежуток длиннее этой доли от среднего означает, что один удар мы
+// пропустили. Такой промежуток в усреднение брать нельзя: он двойной и
+// тянет цифру вниз (замеряли 83 вместо 100). Удар при этом считаем -
+// иначе анимация на странице рассинхронизируется.
+const float MAX_DOLYA_OT_SREDNEGO = 1.60;
+
+// Если столько промежутков подряд оказались двойными - значит пульс
+// реально изменился или контакт с датчиком другой. Тогда набираем
+// статистику заново, а не отбрасываем всё бесконечно.
+const int SKOLKO_PROPUSKOV_DO_SBROSA = 4;
+
 // --- переменные обработки сигнала ---
 float bystroe_srednee = 0;    // сглаженный сигнал
 float bazovaya_liniya = 0;    // медленный уровень, вокруг которого пульсации
@@ -124,6 +142,14 @@ unsigned long vremya_poslednego_udara = 0;
 unsigned long promezhutki[SKOLKO_PROMEZHUTKOV_USREDNYAT];
 int skolko_promezhutkov_nabrali = 0;
 int kuda_pisat_promezhutok = 0;
+
+// Что делать с найденным промежутком между ударами.
+const int RESHENIE_NE_UDAR = 0;    // это не удар, забыть совсем
+const int RESHENIE_ZAPOMNIT = 1;   // обычный удар, взять в статистику
+const int RESHENIE_PROPUSK = 2;    // удар был, но один мы пропустили
+
+// Сколько двойных промежутков попалось подряд.
+int propuskov_podryad = 0;
 
 // Счётчик удров, по нему страничка ловит новый удар.
 unsigned long schetchik_udarov = 0;
@@ -330,6 +356,7 @@ void sbrositPokazaniya() {
   skolko_promezhutkov_nabrali = 0;
   kuda_pisat_promezhutok = 0;
   pulse_ud_v_minutu = 0;
+  propuskov_podryad = 0;
 }
 
 // Записываем очищенный сигнал в буфер для отладки.
@@ -354,26 +381,33 @@ void zapisatVBufer(float ochishennyy_signal) {
   skolko_slozhili = 0;
 }
 
-// Проверяем, похож ли промежуток на настоящий удар сердца.
-bool promezhutok_pohozh_na_udar(unsigned long promezhutok) {
+// Решаем, что делать с промежутком.
+int reshenie_po_promezhutku(unsigned long promezhutok) {
   // Совсем короткие промежутки - это точно не удары.
   if (promezhutok < MIN_PROMEZHUTOK_MS) {
-    return false;
+    return RESHENIE_NE_UDAR;
   }
 
   // Пока статистики мало, доверяем всему, что прошло по времени.
   if (skolko_promezhutkov_nabrali < 3) {
-    return true;
+    return RESHENIE_ZAPOMNIT;
   }
 
-  // Если промежуток сильно короче среднего - это вторичный пик волны,
-  // а не новый удар. Такие пропускаем, иначе пульс удвоится.
   unsigned long sredniy = sredniy_promezhutok();
+
+  // Сильно короче среднего - это вторичный пик волны, а не новый удар.
+  // Иначе пульс покажется вдвое больше настоящего.
   if (promezhutok < sredniy * MIN_DOLYA_OT_SREDNEGO) {
-    return false;
+    return RESHENIE_NE_UDAR;
   }
 
-  return true;
+  // Сильно длиннее среднего - значит один удар мы пропустили.
+  // Промежуток двойной, в статистику его брать нельзя.
+  if (promezhutok > sredniy * MAX_DOLYA_OT_SREDNEGO) {
+    return RESHENIE_PROPUSK;
+  }
+
+  return RESHENIE_ZAPOMNIT;
 }
 
 // Главная работа: читаем датчик и ищем удары.
@@ -444,12 +478,24 @@ void obrabotatDatchik() {
     byli_nizhe_poroga = false;
 
     unsigned long promezhutok = seychas - vremya_poslednego_udara;
+    int reshenie = reshenie_po_promezhutku(promezhutok);
 
-    if (promezhutok_pohozh_na_udar(promezhutok)) {
+    if (reshenie != RESHENIE_NE_UDAR) {
       // Слишком долгая пауза означает, что непрерывность потерялась.
       if (promezhutok > MAX_PROMEZHUTOK_MS || vremya_poslednego_udara == 0) {
         sbrositPokazaniya();
+
+      } else if (reshenie == RESHENIE_PROPUSK) {
+        // Промежуток двойной: удар считаем, но в статистику не берём.
+        propuskov_podryad++;
+
+        // Если такое повторяется - пульс реально изменился, учимся заново.
+        if (propuskov_podryad >= SKOLKO_PROPUSKOV_DO_SBROSA) {
+          sbrositPokazaniya();
+        }
+
       } else {
+        propuskov_podryad = 0;
         zapomnitPromezhutok(promezhutok);
         poschitatPulse();
       }
