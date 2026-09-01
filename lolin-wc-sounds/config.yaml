@@ -1,0 +1,56 @@
+# shel-cmd-conv: yq -o json config.yaml > config.json
+server:
+  host: 0.0.0.0 # if 0.0.0.0 then get from dhcp server if not then use the ip address in config
+  port: 80
+ntp:
+  server: "pool.ntp.org"
+  timezone: "Europe/Moscow"
+  update_interval: 3600 # seconds
+wifi:
+  ssid: your_ssid
+  password: your_password
+database:
+  type: files
+  root_directory: /
+logging:
+  level: INFO
+  format: '%(asctime)s - %(levelname)s - %(message)s'
+playback:
+  type: files
+  schedule:
+  - start: "00:00"
+    end: "06:00"
+    directory: "/birds_sounds"
+    volume: 60
+    random_on_startup: true
+    format: wav # wav or mp3
+    shuffle: false
+    repeat_selected: true
+    loop_directory: false
+  - start: "06:00"
+    end: "12:00"
+    directory: "/birds_sounds"
+    volume: 100
+    random_on_startup: true
+    format: wav
+    shuffle: false
+    repeat_selected: true
+    loop_directory: false
+  - start: "12:00"
+    end: "18:00"
+    directory: "/birds_sounds"
+    volume: 100
+    random_on_startup: true
+    format: wav
+    shuffle: false
+    repeat_selected: true
+    loop_directory: false
+  - start: "18:00"
+    end: "24:00"
+    directory: "/birds_sounds"
+    volume: 100
+    random_on_startup: true
+    format: wav
+    shuffle: false
+    repeat_selected: true
+    loop_directory: false

@@ -1,0 +1,67 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 80
+  },
+  "wifi": {
+    "ssid": "your_ssid",
+    "password": "your_password"
+  },
+  "database": {
+    "type": "files",
+    "root_directory": "/"
+  },
+  "logging": {
+    "level": "INFO",
+    "format": "%(asctime)s - %(levelname)s - %(message)s"
+  },
+  "playback": {
+    "type": "files",
+    "schedule": [
+      {
+        "start": "00:00",
+        "end": "06:00",
+        "directory": "/birds_sounds",
+        "volume": 60,
+        "random_on_startup": true,
+        "format": "wav",
+        "shuffle": false,
+        "repeat_selected": true,
+        "loop_directory": false
+      },
+      {
+        "start": "06:00",
+        "end": "12:00",
+        "directory": "/birds_sounds",
+        "volume": 100,
+        "random_on_startup": true,
+        "format": "wav",
+        "shuffle": false,
+        "repeat_selected": true,
+        "loop_directory": false
+      },
+      {
+        "start": "12:00",
+        "end": "18:00",
+        "directory": "/birds_sounds",
+        "volume": 100,
+        "random_on_startup": true,
+        "format": "wav",
+        "shuffle": false,
+        "repeat_selected": true,
+        "loop_directory": false
+      },
+      {
+        "start": "18:00",
+        "end": "24:00",
+        "directory": "/birds_sounds",
+        "volume": 100,
+        "random_on_startup": true,
+        "format": "wav",
+        "shuffle": false,
+        "repeat_selected": true,
+        "loop_directory": false
+      }
+    ]
+  }
+}
