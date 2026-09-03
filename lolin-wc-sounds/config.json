@@ -1,22 +1,24 @@
 {
-  "server": {
-    "host": "0.0.0.0",
-    "port": 80
-  },
   "wifi": {
     "ssid": "your_ssid",
     "password": "your_password"
   },
-  "database": {
-    "type": "files",
-    "root_directory": "/"
+  "ntp": {
+    "server": "pool.ntp.org",
+    "timezone_offset": 3,
+    "update_interval": 3600
+  },
+  "server": {
+    "port": 80
+  },
+  "motion": {
+    "timeout_seconds": 30,
+    "cooldown_seconds": 5
   },
   "logging": {
-    "level": "INFO",
-    "format": "%(asctime)s - %(levelname)s - %(message)s"
+    "level": "INFO"
   },
   "playback": {
-    "type": "files",
     "schedule": [
       {
         "start": "00:00",
@@ -24,7 +26,6 @@
         "directory": "/birds_sounds",
         "volume": 60,
         "random_on_startup": true,
-        "format": "wav",
         "shuffle": false,
         "repeat_selected": true,
         "loop_directory": false
@@ -35,7 +36,6 @@
         "directory": "/birds_sounds",
         "volume": 100,
         "random_on_startup": true,
-        "format": "wav",
         "shuffle": false,
         "repeat_selected": true,
         "loop_directory": false
@@ -46,7 +46,6 @@
         "directory": "/birds_sounds",
         "volume": 100,
         "random_on_startup": true,
-        "format": "wav",
         "shuffle": false,
         "repeat_selected": true,
         "loop_directory": false
@@ -57,7 +56,6 @@
         "directory": "/birds_sounds",
         "volume": 100,
         "random_on_startup": true,
-        "format": "wav",
         "shuffle": false,
         "repeat_selected": true,
         "loop_directory": false

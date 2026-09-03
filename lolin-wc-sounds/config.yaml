@@ -1,20 +1,20 @@
 # shel-cmd-conv: yq -o json config.yaml > config.json
+# На карту кладётся config.json. Этот yaml - черновик для людей.
+# timezone_offset: 3 значит UTC+3 (Москва). Строку Europe/Moscow ESP не понимает.
 server:
-  host: 0.0.0.0 # if 0.0.0.0 then get from dhcp server if not then use the ip address in config
   port: 80
 ntp:
   server: "pool.ntp.org"
-  timezone: "Europe/Moscow"
-  update_interval: 3600 # seconds
+  timezone_offset: 3
+  update_interval: 3600
 wifi:
   ssid: your_ssid
   password: your_password
-database:
-  type: files
-  root_directory: /
+motion:
+  timeout_seconds: 30
+  cooldown_seconds: 5
 logging:
   level: INFO
-  format: '%(asctime)s - %(levelname)s - %(message)s'
 playback:
   type: files
   schedule:
@@ -23,7 +23,7 @@ playback:
     directory: "/birds_sounds"
     volume: 60
     random_on_startup: true
-    format: wav # wav or mp3
+    format: wav
     shuffle: false
     repeat_selected: true
     loop_directory: false
