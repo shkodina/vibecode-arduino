@@ -15,8 +15,7 @@
 #include <SPI.h>
 #include <time.h>
 #include <ArduinoJson.h>
-#include <i2s.h>
-#include <i2s_reg.h>
+#include <core_esp8266_i2s.h>
 
 // ---------- pinout NodeMCU v3 ----------
 // PIR HC-SR501
