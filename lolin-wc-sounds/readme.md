@@ -4,8 +4,14 @@
 через мини-колонки. Плата — **Lolin NodeMCU v3 (ESP8266)**, как в
 `lolin-web-pulse`.
 
-Заливка и проверка железа — позже, когда приедут модули. Этот файл нужен,
-чтобы потом не вспоминать, зачем проект и как его собирать.
+Управление с компьютера — соседний проект
+`../lolin-wc-sounds--control-plane/` (скан LAN, тёмный UI, ffmpeg).
+Контракт API и грабли загрузки описаны и там, и здесь: не восстанавливать
+поведение по скетчу, если можно прочитать этот файл.
+
+Живой экземпляр (2026-09): DHCP `192.168.88.28`, заливка USB **COM4**
+из WSL (`REZHIM=wsl` в `.env`). WiFi-пароль **не** в прошивке — только
+в `/config.json` на карте.
 
 ## Что делает
 
@@ -20,10 +26,13 @@
   - `/` — страница настроек и загрузки файлов;
   - `/api/...` — управление, в том числе reload и reboot;
   - `/swagger/index.html` — описание API.
-7. Watchdog ~8 с: если loop залипнет — плата сама перезапустится.
-  Кнопка «Перезагрузить» / `POST /api/reboot` специально зависает,
-  чтобы сработал тот же watchdog. `POST /api/reload` только
-  перечитывает `/config.json` с карты, WiFi не рвёт.
+7. Watchdog ~8 с (`ESP.wdtEnable(8000)`). Кормится в `loop`, при раздаче
+  I2S и **в каждом куске** `handleUpload` WRITE (`ESP.wdtFeed` + `yield`).
+  Без кормёжки на upload плата ребутится посреди большого WAV: веб видит
+  обрыв, потом ~8–10 с тишины, затем модуль снова в DHCP. Кнопка
+  «Перезагрузить» / `POST /api/reboot` специально зависает в `while(true)`,
+  чтобы сработал тот же watchdog. `POST /api/reload` только перечитывает
+  `/config.json` с карты, WiFi не рвёт.
 
 Формат звука **только** WAV PCM **16-bit, 16 kHz, mono**. Другие файлы
 прошивка не играет. Загрузка через веб тоже проверяет заголовок WAV и
@@ -127,7 +136,15 @@ GND ---------------------- GND
   предлагает только 8 КБ — тоже сойдёт. 32 КБ и 64 КБ не ставить.
 - В корне: `config.json` (пример лежит рядом с прошивкой).
 - Папка со звуками, например `/birds_sounds/*.wav`.
-- Имена лучше латиницей, короткие: `bird01.wav`.
+- Папки на живой карте: `/data` (птицы), `/water` (ручей и т.п.).
+  Имена через API: только `a-z`, цифры, `-`, `_`, `.`, `/`. Заглавные,
+  пробел, кириллица, `..`, `//`, хвост `/` — ошибка 400, в теле правила
+  латиницей (`PATH_RULES` в скетче). Корень `/` разрешён **только**
+  `GET /api/files`. Остальное (`mkdir`, `upload`, `delete`) корень
+  не принимают.
+- Новую папку создаёт `POST /api/mkdir` (один сегмент, родитель уже
+  должен быть). Загрузка wav папки сама не создаёт. Windows-папку
+  `System Volume Information` API не отдаст: в имени пробелы.
 
 
 
@@ -214,19 +231,33 @@ yq -o json config.yaml > config.json
 | `POST /api/config`                            | тело JSON, пишет `/config.json`    |
 | `POST /api/reload`                            | перечитать `/config.json`, WiFi не рвать |
 | `POST /api/reboot`                            | ответ ok, затем зависание → watchdog reset |
-| `GET /api/files?path=/birds_sounds`           | список                             |
-| `POST /api/upload?path=/birds_sounds/a.wav`   | тело = файл wav                    |
-| `DELETE /api/delete?path=/birds_sounds/a.wav` | удалить                            |
+| `GET /api/files?path=/`                       | одна папка, не рекурсивно: `{path, entries:[{name,type,size?}]}` |
+| `POST /api/mkdir?path=/birds_sounds`          | создать один каталог, родитель уже есть |
+| `POST /api/upload?path=/data/a.wav`           | multipart поле `file` = сырой WAV; папку не создаёт |
+| `DELETE /api/delete?path=/data/a.wav`         | удалить файл (не config.json) |
+
+
+Как узнать, что на :80 именно этот модуль, а не чужой веб: `GET /api/status`
+обязан вернуть JSON со всеми полями `playing`, `sd_ok`, `volume`, `ip`,
+`motion`, `file`, `directory` (плюс time, time_ok, wifi_sta). Так делает
+control plane. Не опираться на HTML title.
+
+Upload — не «сырой POST body», а обработчик ESP8266WebServer
+`server.on("/api/upload", POST, done, handleUpload)`: браузер шлёт
+`FormData` с полем `file`. Первые 44 байта файла проверяются как RIFF/WAVE
+PCM 16 kHz 16-bit mono. Иначе 400.
+
+`GET /api/files` не дерево: один уровень. Control plane сам обходит папки.
 
 
 Смена WiFi через веб применяется в памяти, но **переподключение к новой
 сети — после перезагрузки** платы (кнопка RST или `POST /api/reboot`).
 Так проще и нет обрыва в середине сохранения.
 
-`POST /api/reload` только перечитывает карту. Watchdog кормится в `loop`
-и при раздаче I2S; если прошивка залипнет — плата сама перезапустится
-примерно через 8 с. Кнопка «Перезагрузить» специально зависает, чтобы
-сработал тот же watchdog.
+`POST /api/reload` только перечитывает карту. Watchdog кормится в `loop`,
+при I2S и при upload WRITE. Если прошивка залипнет — плата сама
+перезапустится примерно через 8 с. Кнопка «Перезагрузить» специально
+зависает, чтобы сработал тот же watchdog.
 
 Загрузка чужого wav: если не 16-bit / не 16 kHz / не mono — ответ 400
 с текстом вроде:
@@ -258,16 +289,20 @@ arduino-cli lib install ArduinoJson
 Собрать:
 
 ```bash
-cd /home/blobby/home_cnf/xtmp-work-dir/vibecode-arduino/lolin-wc-sounds
-./sborka.sh
-./sborka.sh zalit
+cd /home/blobby/work_dir/vibecode-arduino/lolin-wc-sounds
+cp .env.primer .env    # если ещё нет: REZHIM=wsl, PORT=COM4
+./sborka.sh            # только собрать
+./sborka.sh zalit      # собрать и залить через виндовый arduino-cli.exe
 ```
 
 Пароль WiFi **не** зашивается компилятором (в отличие от lolin-web-pulse).
 Он лежит на карте в `config.json`. Карту можно править с компьютера.
 
-Из WSL заливка часто не видит COM — в `.env` поставь `REZHIM=wsl` и `PORT=COM4`,
-как в `lolin-web-pulse`. Подробности: `READ-ME-NOTES/arduino/wsl.md`.
+Из WSL COM-порт платы виден Windows, не Linux. Скрипт копирует `.ino` на
+диск C (`C:\Users\<user>\arduino-wsl\lolin-wc-sounds`) и зовёт
+`arduino-cli.exe`. На этой машине заливка шла на **COM4** (ещё бывают
+COM10/COM11 — не путать). После upload плата ресетится RTS и снова
+берёт DHCP; IP часто тот же.
 
 ## Конвертация wav
 
@@ -277,7 +312,14 @@ ffmpeg:
 ffmpeg -i ptitsy.mp3 -ar 16000 -ac 1 -sample_fmt s16 bird01.wav
 ```
 
-Потом файл в `/birds_sounds/` на карте или через `/api/upload`.
+Потом файл в папку на карте (`/data`, `/water`, …) или через `/api/upload`.
+Control plane делает ту же команду, если выбран mp3/ogg/чужой wav.
+
+## Control plane
+
+Папка `../lolin-wc-sounds--control-plane/`. Не дублировать веб модуля —
+там прокси и ffmpeg. Меняя поля статуса или правила путей, править оба
+readme и `WC_STATUS_KEYS` в control plane, иначе скан «не видит» плату.
 
 ## Что можно доработать позже
 
@@ -298,6 +340,7 @@ ffmpeg -i ptitsy.mp3 -ar 16000 -ac 1 -sample_fmt s16 bird01.wav
 | `lolin-wc-sounds.ino` | прошивка                      |
 | `config.json`         | пример на SD                  |
 | `config.yaml`         | человеческий черновик конфига |
+| `.env` / `.env.primer`| PORT и REZHIM для sborka.sh   |
 | `sborka.sh`           | compile / upload              |
 | `readme.md`           | этот текст                    |
 

@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WC Sounds — Control Plane</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="grain"></div>
+  <header class="top">
+    <div class="brand">
+      <span class="mark" aria-hidden="true"></span>
+      <div>
+        <h1>WC Sounds</h1>
+        <p class="sub">control plane · поиск и управление модулями</p>
+      </div>
+    </div>
+    <div class="top-meta">
+      <span id="meta-line">подсеть…</span>
+      <button id="scan-btn" type="button">Сканировать сеть</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="rail">
+      <div class="rail-head">
+        <h2>Модули</h2>
+        <span id="count" class="pill">0</span>
+      </div>
+      <p id="scan-note" class="note">Нажмите «Сканировать сеть» — приложение опросит порт 80 в пуле адресов из config.yaml.</p>
+      <div id="module-list" class="cards"></div>
+    </aside>
+
+    <section class="stage" id="stage">
+      <div class="empty" id="empty">
+        <p class="empty-kicker">нет выбранного модуля</p>
+        <h2>Найдите платы в сети</h2>
+        <p>После сканирования кликните карточку модуля — откроются текущие настройки, воспроизведение, файлы на SD и загрузка WAV.</p>
+      </div>
+
+      <div class="detail hidden" id="detail">
+        <div class="detail-head">
+          <div>
+            <p class="ip" id="d-ip">—</p>
+            <p class="live" id="d-live">—</p>
+          </div>
+          <div class="leds" id="d-leds"></div>
+        </div>
+
+        <div class="toolbar">
+          <button type="button" data-act="play">Играть</button>
+          <button type="button" data-act="stop" class="ghost">Стоп</button>
+          <label class="vol">
+            Громкость
+            <input id="live-vol" type="range" min="0" max="100" value="70">
+            <span id="live-vol-n">70</span>
+          </label>
+          <button type="button" data-act="volume" class="ghost">Применить сейчас</button>
+          <button type="button" data-act="reload" class="ghost">Перечитать config</button>
+          <button type="button" data-act="reboot" class="danger">Перезагрузить</button>
+        </div>
+        <p class="flash" id="flash" hidden></p>
+
+        <div class="grid">
+          <article class="panel">
+            <h3>Настройки модуля</h3>
+            <div class="fields">
+              <label>WiFi SSID <input id="ssid" autocomplete="off"></label>
+              <label>WiFi пароль <input id="pass" type="password" autocomplete="off"></label>
+              <label>NTP сервер <input id="ntp"></label>
+              <label>Часовой пояс, часы <input id="tz" type="number"></label>
+              <label>Интервал NTP, сек <input id="ntpint" type="number"></label>
+              <label>Таймаут движения, сек <input id="mtime" type="number"></label>
+              <label>Пауза PIR, сек <input id="mcool" type="number"></label>
+            </div>
+            <h4>Расписание</h4>
+            <div id="schedule" class="schedule"></div>
+            <p><button type="button" id="save-cfg">Сохранить config.json на модуль</button></p>
+          </article>
+
+          <article class="panel">
+            <h3>Файлы на SD</h3>
+            <div class="files-toolbar">
+              <button type="button" id="list-files" class="ghost">Обновить</button>
+              <button type="button" id="mkdir-btn" class="ghost">Создать папку</button>
+            </div>
+            <div class="files-layout">
+              <div id="file-tree" class="file-tree"></div>
+              <div>
+                <label class="current-dir">выбрано <input id="dir-path" value="/" readonly></label>
+                <div id="files" class="files"></div>
+              </div>
+            </div>
+            <h4>Загрузить звук</h4>
+            <label>Файл <input id="upfile" type="file" accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a"></label>
+            <p id="analyze" class="analyze" hidden></p>
+            <label>Путь на карте <input id="uppath" value="/birds_sounds/bird.wav"></label>
+            <div class="row">
+              <button type="button" id="convert-btn" class="ghost" hidden>Конвертировать через ffmpeg</button>
+              <button type="button" id="upload-btn">Загрузить на модуль</button>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

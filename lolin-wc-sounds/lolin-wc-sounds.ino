@@ -154,17 +154,91 @@ int16_t scaleSample(int16_t sample, int volume) {
   return (int16_t)scaled;
 }
 
-bool pathLooksSafe(const String &path) {
+const char *PATH_RULES =
+    "Razresheno: a-z 0-9 - _ . / . Put ot kornya, nachinaetsya s '/'. "
+    "Nelzya: zaglavnye, probel, kirillica, '..', '//', segment '.', hvostovoy '/'.";
+
+bool pathCharOk(char c) {
+  return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+      || c == '-' || c == '_' || c == '.' || c == '/';
+}
+
+String parentDirOf(const String &path) {
+  int slash = path.lastIndexOf('/');
+  if (slash <= 0) {
+    return "/";
+  }
+  return path.substring(0, slash);
+}
+
+bool pathCheck(const String &path, bool allowRoot, String &err) {
+  if (path.length() == 0) {
+    err = String("pustoy path. ") + PATH_RULES;
+    return false;
+  }
   if (!path.startsWith("/")) {
+    err = String("path dolzhen nachinatsya s '/'. ") + PATH_RULES;
+    return false;
+  }
+  if (path.length() >= MAX_PATH) {
+    err = String("path slishkom dlinnyy (max ") + String(MAX_PATH - 1) + "). " + PATH_RULES;
+    return false;
+  }
+  if (path == "/") {
+    if (!allowRoot) {
+      err = String("koren '/' nelzya dlya etoy komandy. ") + PATH_RULES;
+      return false;
+    }
+    return true;
+  }
+  if (path.endsWith("/")) {
+    err = String("ne stav hvostovoy '/'. Primer: /data/bird.wav. ") + PATH_RULES;
+    return false;
+  }
+  if (path.indexOf("//") >= 0) {
+    err = String("nelzya '//' (pustoy segment). ") + PATH_RULES;
     return false;
   }
   if (path.indexOf("..") >= 0) {
+    err = String("nelzya '..'. ") + PATH_RULES;
     return false;
   }
-  if (path.length() < 2 || path.length() >= MAX_PATH) {
-    return false;
+  for (unsigned i = 0; i < path.length(); i++) {
+    char c = path.charAt(i);
+    if (!pathCharOk(c)) {
+      err = String("zapreshchen simvol v '") + path + "'. " + PATH_RULES;
+      return false;
+    }
+  }
+  int start = 1;
+  for (unsigned i = 1; i <= path.length(); i++) {
+    if (i == path.length() || path.charAt(i) == '/') {
+      int seglen = (int)i - start;
+      if (seglen <= 0) {
+        err = String("pustoy segment. ") + PATH_RULES;
+        return false;
+      }
+      if (seglen == 1 && path.charAt(start) == '.') {
+        err = String("nelzya segment '.'. ") + PATH_RULES;
+        return false;
+      }
+      start = (int)i + 1;
+    }
   }
   return true;
+}
+
+bool sdDirExists(const String &dir) {
+  if (dir == "/") {
+    return sdOk;
+  }
+  File f = SD.open(dir.c_str());
+  if (!f) {
+    return false;
+  }
+  bool isDir = f.isDirectory();
+  f.close();
+  return isDir;
 }
 
 bool endsWithIgnoreCase(const String &value, const char *suffix) {
@@ -747,7 +821,11 @@ pre { background:#f4f4f4; padding:8px; overflow:auto; }
 <div class="card">
   <h2>Файлы</h2>
   <p><input id="upfile" type="file" accept=".wav"></p>
-  <label>Путь на карте, например /birds_sounds/bird.wav
+  <label>Новая папка, например /birds_sounds
+    <input id="mkdirpath" value="/birds_sounds">
+  </label>
+  <button onclick="mkdir()">Создать папку</button>
+  <label>Путь файла, например /birds_sounds/bird.wav
     <input id="uppath" value="/birds_sounds/bird.wav">
   </label>
   <button onclick="uploadFile()">Загрузить WAV 16kHz 16bit mono</button>
@@ -819,6 +897,12 @@ async function saveCfg(){
   alert(await r.text());
   loadStatus();
 }
+async function mkdir(){
+  const path = document.getElementById('mkdirpath').value;
+  const r = await fetch('/api/mkdir?path='+encodeURIComponent(path), {method:'POST'});
+  alert(await r.text());
+  loadFiles();
+}
 async function uploadFile(){
   const file = document.getElementById('upfile').files[0];
   const path = document.getElementById('uppath').value;
@@ -859,8 +943,9 @@ code, pre { background:#f6f6f6; padding:2px 6px; }
 <div class="ep"><b>POST /api/config</b><br>Тело: JSON конфигурации. Пишет на SD в /config.json и применяет сразу.</div>
 <div class="ep"><b>POST /api/reload</b><br>Перечитать /config.json с карты. WiFi не переподключает.</div>
 <div class="ep"><b>POST /api/reboot</b><br>Отвечает ok и зависает: hardware watchdog сбрасывает плату.</div>
-<div class="ep"><b>GET /api/files?path=/birds_sounds</b><br>Список файлов в папке.</div>
-<div class="ep"><b>POST /api/upload?path=/birds_sounds/a.wav</b><br>Тело: сырой WAV. Только PCM 16-bit 16kHz mono.</div>
+<div class="ep"><b>GET /api/files?path=/</b><br>Содержимое одной папки: path + entries (type file/dir, size у файлов). Не рекурсивно.</div>
+<div class="ep"><b>POST /api/mkdir?path=/birds_sounds</b><br>Создать один последний сегмент. Родитель должен уже быть. Имена: a-z 0-9 - _ . /</div>
+<div class="ep"><b>POST /api/upload?path=/birds_sounds/a.wav</b><br>Тело: сырой WAV. Только PCM 16-bit 16kHz mono. Папку не создаёт — сначала mkdir.</div>
 <div class="ep"><b>DELETE /api/delete?path=/birds_sounds/a.wav</b><br>Удалить файл с карты.</div>
 <div class="ep"><b>GET /swagger/index.html</b><br>Эта страница.</div>
 <pre>
@@ -875,7 +960,8 @@ code, pre { background:#f6f6f6; padding:2px 6px; }
     "/api/config": {"get": {"summary": "get config"}, "post": {"summary": "save config"}},
     "/api/reload": {"post": {"summary": "reread config.json"}},
     "/api/reboot": {"post": {"summary": "watchdog reset"}},
-    "/api/files": {"get": {"summary": "list files"}},
+    "/api/files": {"get": {"summary": "list one directory"}},
+    "/api/mkdir": {"post": {"summary": "create one folder"}},
     "/api/upload": {"post": {"summary": "upload wav"}},
     "/api/delete": {"delete": {"summary": "delete file"}}
   }
@@ -984,8 +1070,9 @@ void handleReboot() {
 
 void handleFiles() {
   String path = server.hasArg("path") ? server.arg("path") : "/";
-  if (!pathLooksSafe(path)) {
-    sendText(400, "plohoy path");
+  String err;
+  if (!pathCheck(path, true, err)) {
+    sendText(400, err);
     return;
   }
   File dir = SD.open(path);
@@ -993,8 +1080,14 @@ void handleFiles() {
     sendText(404, "net takoy papki");
     return;
   }
-  DynamicJsonDocument doc(2048);
-  JsonArray arr = doc.createNestedArray("files");
+  if (!dir.isDirectory()) {
+    dir.close();
+    sendText(400, "eto fayl, ne papka");
+    return;
+  }
+  DynamicJsonDocument doc(4096);
+  doc["path"] = path;
+  JsonArray arr = doc.createNestedArray("entries");
   while (true) {
     File entry = dir.openNextFile();
     if (!entry) {
@@ -1002,8 +1095,12 @@ void handleFiles() {
     }
     JsonObject o = arr.createNestedObject();
     o["name"] = String(entry.name());
-    o["size"] = entry.size();
-    o["dir"] = entry.isDirectory();
+    if (entry.isDirectory()) {
+      o["type"] = "dir";
+    } else {
+      o["type"] = "file";
+      o["size"] = entry.size();
+    }
     entry.close();
   }
   dir.close();
@@ -1012,10 +1109,51 @@ void handleFiles() {
   server.send(200, "application/json", out);
 }
 
+void handleMkdir() {
+  if (!server.hasArg("path")) {
+    sendText(400, String("nuzhen parametr path. Primer: /birds_sounds. ") + PATH_RULES);
+    return;
+  }
+  String path = server.arg("path");
+  String err;
+  if (!pathCheck(path, false, err)) {
+    sendText(400, err);
+    return;
+  }
+  if (path == CONFIG_PATH) {
+    sendText(400, "nelzya sozdat papku /config.json");
+    return;
+  }
+  String parent = parentDirOf(path);
+  if (!sdDirExists(parent)) {
+    sendText(400, "papka " + parent + " ne sushchestvuet, snachala POST /api/mkdir?path=" + parent);
+    return;
+  }
+  if (SD.exists(path.c_str())) {
+    File f = SD.open(path.c_str());
+    bool isDir = f && f.isDirectory();
+    if (f) {
+      f.close();
+    }
+    if (isDir) {
+      sendText(200, "papka uzhe est " + path);
+      return;
+    }
+    sendText(400, "put zanyat faylom");
+    return;
+  }
+  if (SD.mkdir(path.c_str())) {
+    sendText(200, "papka sozdana " + path);
+  } else {
+    sendText(500, "ne smog sozdat papku");
+  }
+}
+
 void handleDelete() {
   String path = server.arg("path");
-  if (!pathLooksSafe(path) || path == CONFIG_PATH) {
-    sendText(400, "plohoy path");
+  String err;
+  if (!pathCheck(path, false, err) || path == CONFIG_PATH) {
+    sendText(400, path == CONFIG_PATH ? String("nelzya udalit /config.json") : err);
     return;
   }
   if (!SD.exists(path.c_str())) {
@@ -1043,23 +1181,28 @@ void handleUpload() {
     wavHeaderGot = 0;
     wavHeaderChecked = false;
     uploadTargetPath = server.arg("path");
-    if (!pathLooksSafe(uploadTargetPath) || !endsWithIgnoreCase(uploadTargetPath, ".wav")) {
+    String err;
+    if (!pathCheck(uploadTargetPath, false, err)) {
       uploadOk = false;
-      uploadError = "path dolzhen byt /papka/file.wav";
+      uploadError = err;
+      return;
+    }
+    if (!endsWithIgnoreCase(uploadTargetPath, ".wav")) {
+      uploadOk = false;
+      uploadError = String("fayl dolzhen konchatsya na .wav. ") + PATH_RULES;
       return;
     }
     if (playing) {
       stopPlayback();
     }
+    String dir = parentDirOf(uploadTargetPath);
+    if (!sdDirExists(dir)) {
+      uploadOk = false;
+      uploadError = "papka " + dir + " ne sushchestvuet, snachala POST /api/mkdir?path=" + dir;
+      return;
+    }
     if (SD.exists(uploadTargetPath.c_str())) {
       SD.remove(uploadTargetPath.c_str());
-    }
-    int slash = uploadTargetPath.lastIndexOf('/');
-    if (slash > 0) {
-      String dir = uploadTargetPath.substring(0, slash);
-      if (!SD.exists(dir.c_str())) {
-        SD.mkdir(dir.c_str());
-      }
     }
     uploadFileHandle = SD.open(uploadTargetPath.c_str(), FILE_WRITE);
     if (!uploadFileHandle) {
@@ -1094,6 +1237,8 @@ void handleUpload() {
     if (uploadFileHandle) {
       uploadFileHandle.write(data, len);
       uploadBytes += len;
+      ESP.wdtFeed();
+      yield();
     }
   } else if (up.status == UPLOAD_FILE_END) {
     if (uploadFileHandle) {
@@ -1131,6 +1276,7 @@ void setupServer() {
   server.on("/api/reload", HTTP_POST, handleReload);
   server.on("/api/reboot", HTTP_POST, handleReboot);
   server.on("/api/files", HTTP_GET, handleFiles);
+  server.on("/api/mkdir", HTTP_POST, handleMkdir);
   server.on("/api/delete", HTTP_DELETE, handleDelete);
   server.on("/api/upload", HTTP_POST, handleUploadDone, handleUpload);
   server.onNotFound(handleNotFound);
