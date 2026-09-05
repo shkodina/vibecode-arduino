@@ -604,6 +604,9 @@ void feedI2s() {
       break;
     }
     playPos += 2;
+    if ((playPos & 0x7F) == 0) {
+      ESP.wdtFeed();
+    }
   }
 
   if (playPos + 1 >= len) {
@@ -723,6 +726,8 @@ pre { background:#f4f4f4; padding:8px; overflow:auto; }
 <div class="card">
   <button onclick="api('/api/play','POST')">Играть</button>
   <button onclick="api('/api/stop','POST')">Стоп</button>
+  <button onclick="reloadCfg()">Перечитать config</button>
+  <button onclick="reboot()">Перезагрузить</button>
   <label>Громкость <input id="vol" type="number" min="0" max="100" value="100"></label>
   <button onclick="setVolume()">Сохранить громкость</button>
 </div>
@@ -772,8 +777,22 @@ async function loadFiles(){
   document.getElementById('files').textContent = JSON.stringify(f, null, 2);
 }
 async function api(url, method){
-  await fetch(url,{method});
+  const r = await fetch(url,{method});
+  if (r && r.text) { try { await r.text(); } catch(e) {} }
   loadStatus();
+}
+async function reloadCfg(){
+  const r = await fetch('/api/reload',{method:'POST'});
+  alert(await r.text());
+  loadStatus();
+  loadCfg();
+}
+async function reboot(){
+  document.getElementById('status').textContent = 'Модуль перезагружается через watchdog...';
+  try {
+    await fetch('/api/reboot',{method:'POST'});
+  } catch(e) {}
+  setTimeout(loadStatus, 8000);
 }
 async function setVolume(){
   const v = document.getElementById('vol').value;
@@ -838,6 +857,8 @@ code, pre { background:#f6f6f6; padding:2px 6px; }
 <div class="ep"><b>POST /api/volume?value=0..100</b><br>Громкость прямо сейчас. В config не пишет.</div>
 <div class="ep"><b>GET /api/config</b><br>Текущий config.json.</div>
 <div class="ep"><b>POST /api/config</b><br>Тело: JSON конфигурации. Пишет на SD в /config.json и применяет сразу.</div>
+<div class="ep"><b>POST /api/reload</b><br>Перечитать /config.json с карты. WiFi не переподключает.</div>
+<div class="ep"><b>POST /api/reboot</b><br>Отвечает ok и зависает: hardware watchdog сбрасывает плату.</div>
 <div class="ep"><b>GET /api/files?path=/birds_sounds</b><br>Список файлов в папке.</div>
 <div class="ep"><b>POST /api/upload?path=/birds_sounds/a.wav</b><br>Тело: сырой WAV. Только PCM 16-bit 16kHz mono.</div>
 <div class="ep"><b>DELETE /api/delete?path=/birds_sounds/a.wav</b><br>Удалить файл с карты.</div>
@@ -852,6 +873,8 @@ code, pre { background:#f6f6f6; padding:2px 6px; }
     "/api/stop": {"post": {"summary": "stop"}},
     "/api/volume": {"post": {"summary": "volume"}},
     "/api/config": {"get": {"summary": "get config"}, "post": {"summary": "save config"}},
+    "/api/reload": {"post": {"summary": "reread config.json"}},
+    "/api/reboot": {"post": {"summary": "watchdog reset"}},
     "/api/files": {"get": {"summary": "list files"}},
     "/api/upload": {"post": {"summary": "upload wav"}},
     "/api/delete": {"delete": {"summary": "delete file"}}
@@ -931,6 +954,32 @@ void handlePostConfig() {
     return;
   }
   sendText(200, "sohraneno. wifi pomenyaetsya posle perezagruzki");
+}
+
+void handleReload() {
+  if (!sdOk) {
+    SPI.begin();
+    sdOk = SD.begin(PIN_SD_CS);
+  }
+  if (!sdOk) {
+    sendText(500, "SD karta ne vidna");
+    return;
+  }
+  if (!loadConfigFromSd()) {
+    sendText(400, "config.json plohoy");
+    return;
+  }
+  configOk = true;
+  applyPeriod(findPeriodIndex(currentMinutesOfDay()), false);
+  sendText(200, "config perechitan. wifi pomenyaetsya posle perezagruzki");
+}
+
+void handleReboot() {
+  sendText(200, "ok, watchdog");
+  delay(200);
+  logMsg("Reboot cherez watchdog");
+  while (true) {
+  }
 }
 
 void handleFiles() {
@@ -1079,6 +1128,8 @@ void setupServer() {
   server.on("/api/volume", HTTP_POST, handleVolume);
   server.on("/api/config", HTTP_GET, handleGetConfig);
   server.on("/api/config", HTTP_POST, handlePostConfig);
+  server.on("/api/reload", HTTP_POST, handleReload);
+  server.on("/api/reboot", HTTP_POST, handleReboot);
   server.on("/api/files", HTTP_GET, handleFiles);
   server.on("/api/delete", HTTP_DELETE, handleDelete);
   server.on("/api/upload", HTTP_POST, handleUploadDone, handleUpload);
@@ -1092,6 +1143,7 @@ void setupServer() {
 void setup() {
   Serial.begin(115200);
   delay(200);
+  ESP.wdtEnable(8000);
   logMsg("lolin-wc-sounds start");
   pinMode(PIN_PIR, INPUT);
 
@@ -1118,6 +1170,7 @@ void setup() {
 }
 
 void loop() {
+  ESP.wdtFeed();
   server.handleClient();
 
   unsigned long now = millis();
