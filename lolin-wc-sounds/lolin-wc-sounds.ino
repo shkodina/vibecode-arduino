@@ -39,6 +39,12 @@ const int BUFFER_BYTES = 4096;
 const int MAX_SCHEDULE = 8;
 const int MAX_FILES_IN_DIR = 40;
 const int MAX_PATH = 64;
+// Движение: пин HIGH и без новых фронтов ≥400 мс (этот PIR держит ~1.5–2 с).
+const int MOTION_STABLE_SAMPLES = 20;
+const unsigned long MOTION_STABLE_MS = 400;
+const unsigned long MOTION_BOOT_IGNORE_MS = 10000;
+const unsigned int MOTION_CHATTER_MAX_RISES = 6;
+const unsigned long MOTION_CHATTER_WINDOW_MS = 1000;
 const char *CONFIG_PATH = "/config.json";
 const char *FALLBACK_SSID = "WC-Sounds";
 const char *FALLBACK_PASS = "wcsounds1";
@@ -77,6 +83,19 @@ bool timeOk = false;
 unsigned long lastNtpMs = 0;
 unsigned long lastMotionMs = 0;
 unsigned long lastTriggerMs = 0;
+unsigned long ignoreMotionUntilMs = 0;
+unsigned long motionHighStartMs = 0;
+unsigned int motionHighSamples = 0;
+unsigned long pirRiseCount = 0;
+unsigned long pirConfirmedCount = 0;
+unsigned long lastRawHighDurationMs = 0;
+unsigned long lastRiseMs = 0;
+unsigned long chatterWindowStartMs = 0;
+unsigned int chatterRises = 0;
+bool motionSawHigh = false;
+bool motionActive = false;
+bool motionRawHigh = false;
+bool motionChatter = false;
 bool playing = false;
 bool playRequested = false;
 bool stopRequested = false;
@@ -130,6 +149,9 @@ void minutesToHhMm(int minutes, char *out, int outSize) {
 }
 
 void logMsg(const char *text) {
+  if (playing) {
+    return;
+  }
   Serial.println(text);
 }
 
@@ -637,6 +659,7 @@ void startPlayback() {
     logMsg("Net wav-faylov dlya vosproizvedeniya");
     return;
   }
+  lastMotionMs = millis();
   i2s_begin();
   i2s_set_rate(SAMPLE_RATE);
   playing = true;
@@ -836,7 +859,7 @@ pre { background:#f4f4f4; padding:8px; overflow:auto; }
 async function loadStatus(){
   const s = await (await fetch('/api/status')).json();
   document.getElementById('status').textContent =
-    'Время: '+s.time+' | играет: '+s.playing+' | ещё: '+(s.remaining_seconds||0)+'с | файл: '+(s.file||'-')+' | IP: '+s.ip;
+    'Время: '+s.time+' | играет: '+s.playing+' | ещё: '+(s.remaining_seconds||0)+'с | motion: '+s.motion+' | raw: '+s.motion_raw+' | файл: '+(s.file||'-')+' | IP: '+s.ip;
 }
 async function loadCfg(){
   const c = await (await fetch('/api/config')).json();
@@ -1022,9 +1045,6 @@ int motionTimeoutLeftSeconds() {
   if (cfg.motionTimeoutSec <= 0) {
     return -1;
   }
-  if (digitalRead(PIN_PIR) == HIGH) {
-    return cfg.motionTimeoutSec;
-  }
   unsigned long now = millis();
   unsigned long limitMs = (unsigned long)cfg.motionTimeoutSec * 1000UL;
   unsigned long elapsed = now - lastMotionMs;
@@ -1032,6 +1052,52 @@ int motionTimeoutLeftSeconds() {
     return 0;
   }
   return (int)((limitMs - elapsed + 999UL) / 1000UL);
+}
+
+void updateMotion(unsigned long now) {
+  motionRawHigh = digitalRead(PIN_PIR) == HIGH;
+  if (now < MOTION_BOOT_IGNORE_MS) {
+    motionSawHigh = false;
+    motionHighStartMs = 0;
+    motionHighSamples = 0;
+    lastRiseMs = 0;
+    motionActive = false;
+    motionChatter = false;
+    return;
+  }
+  if (now - chatterWindowStartMs > MOTION_CHATTER_WINDOW_MS) {
+    chatterWindowStartMs = now;
+    chatterRises = 0;
+    motionChatter = false;
+  }
+  if (motionRawHigh) {
+    if (!motionSawHigh) {
+      motionSawHigh = true;
+      motionHighStartMs = now;
+      lastRiseMs = now;
+      motionHighSamples = 0;
+      pirRiseCount++;
+      chatterRises++;
+      if (chatterRises > MOTION_CHATTER_MAX_RISES) {
+        motionChatter = true;
+      }
+    }
+    if (motionHighSamples < 60000) {
+      motionHighSamples++;
+    }
+    // Наводка: частые фронты. Живой PIR: после дребезга пин спокойно стоит HIGH.
+    motionActive = (motionHighSamples >= MOTION_STABLE_SAMPLES) &&
+                   (now - lastRiseMs >= MOTION_STABLE_MS);
+  } else {
+    if (motionSawHigh) {
+      lastRawHighDurationMs = now - motionHighStartMs;
+    }
+    motionSawHigh = false;
+    motionHighStartMs = 0;
+    lastRiseMs = 0;
+    motionHighSamples = 0;
+    motionActive = false;
+  }
 }
 
 bool playbackWillContinuePastThisFile() {
@@ -1064,7 +1130,7 @@ int remainingPlaySeconds() {
 }
 
 void handleStatus() {
-  DynamicJsonDocument doc(1024);
+  DynamicJsonDocument doc(1536);
   doc["time"] = currentTimeString();
   doc["time_ok"] = timeOk;
   doc["playing"] = playing;
@@ -1074,20 +1140,39 @@ void handleStatus() {
   doc["sd_ok"] = sdOk;
   doc["wifi_sta"] = wifiStaOk;
   doc["ip"] = wifiStaOk ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
-  doc["motion"] = digitalRead(PIN_PIR) == HIGH;
+  doc["motion"] = motionActive;
+  doc["motion_raw"] = motionRawHigh;
+  doc["motion_chatter"] = motionChatter;
   doc["remaining_seconds"] = remainingPlaySeconds();
+  doc["uptime_s"] = millis() / 1000UL;
+  doc["pir_rises"] = pirRiseCount;
+  doc["pir_ok"] = pirConfirmedCount;
+  doc["last_high_ms"] = lastRawHighDurationMs;
+  doc["high_samples"] = motionHighSamples;
   String out;
   serializeJson(doc, out);
   server.send(200, "application/json", out);
 }
 
 void handlePlay() {
+  lastMotionMs = millis();
+  ignoreMotionUntilMs = 0;
+  stopRequested = false;
+  if (playing) {
+    stopPlayback();
+  }
   playRequested = true;
   sendText(200, "ok");
 }
 
 void handleStop() {
+  playRequested = false;
   stopRequested = true;
+  unsigned long hold = (unsigned long)cfg.motionCooldownSec * 1000UL;
+  if (hold < 5000UL) {
+    hold = 5000UL;
+  }
+  ignoreMotionUntilMs = millis() + hold;
   sendText(200, "ok");
 }
 
@@ -1402,12 +1487,17 @@ void loop() {
     syncNtp();
   }
 
-  bool motion = digitalRead(PIN_PIR) == HIGH;
-  if (motion) {
+  bool wasMotion = motionActive;
+  updateMotion(now);
+  bool motionOk = motionActive && (now >= ignoreMotionUntilMs);
+  if (motionOk) {
     lastMotionMs = now;
     if (!playing && now - lastTriggerMs > (unsigned long)cfg.motionCooldownSec * 1000UL) {
       lastTriggerMs = now;
       playRequested = true;
+    }
+    if (!wasMotion) {
+      pirConfirmedCount++;
     }
   }
   if (playing && cfg.motionTimeoutSec > 0 && now - lastMotionMs > (unsigned long)cfg.motionTimeoutSec * 1000UL) {

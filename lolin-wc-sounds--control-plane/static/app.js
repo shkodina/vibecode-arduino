@@ -121,6 +121,7 @@ function renderLeds(s) {
   $("d-leds").innerHTML = `
     <span class="led ${s.playing ? "hot" : ""}"><span class="dot ${s.playing ? "play" : ""}"></span>играет</span>
     <span class="led ${s.motion ? "hot" : ""}"><span class="dot ${s.motion ? "motion" : ""}"></span>движение</span>
+    <span class="led ${s.motion_raw ? "hot" : ""}"><span class="dot ${s.motion_raw ? "motion" : ""}"></span>PIR сырой</span>
     <span class="led ${s.sd_ok ? "hot" : ""}"><span class="dot ${s.sd_ok ? "on" : ""}"></span>SD</span>
     <span class="led ${s.wifi_sta ? "hot" : ""}"><span class="dot ${s.wifi_sta ? "on" : ""}"></span>STA</span>
     <span class="led"><span class="dot ${s.time_ok ? "on" : ""}"></span>NTP</span>`;
