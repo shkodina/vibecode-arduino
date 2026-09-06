@@ -223,7 +223,7 @@ yq -o json config.yaml > config.json
 | --------------------------------------------- | ---------------------------------- |
 | `http://IP/`                                  | настройки, громкость, загрузка wav |
 | `http://IP/swagger/index.html`                | описание API                       |
-| `GET /api/status`                             | время, играет ли, файл, IP         |
+| `GET /api/status`                             | время, играет ли, remaining_seconds, файл, IP |
 | `POST /api/play`                              | включить                           |
 | `POST /api/stop`                              | выключить                          |
 | `POST /api/volume?value=70`                   | громкость сейчас (в файл не пишет) |
@@ -239,8 +239,12 @@ yq -o json config.yaml > config.json
 
 Как узнать, что на :80 именно этот модуль, а не чужой веб: `GET /api/status`
 обязан вернуть JSON со всеми полями `playing`, `sd_ok`, `volume`, `ip`,
-`motion`, `file`, `directory` (плюс time, time_ok, wifi_sta). Так делает
-control plane. Не опираться на HTML title.
+`motion`, `file`, `directory` (плюс time, time_ok, wifi_sta,
+`remaining_seconds`). Так делает control plane. Не опираться на HTML title.
+`remaining_seconds` — целое, сколько ещё секунд будет звук, пока не наступит
+полная тишина в ожидании движения. Если не играет — `0`. Пока есть движение,
+это `motion.timeout_seconds` (отсчёт начнётся, когда PIR отпустит). Если
+файлы не зациклены и текущий WAV кончится раньше таймаута — берётся меньшее.
 
 Upload — не «сырой POST body», а обработчик ESP8266WebServer
 `server.on("/api/upload", POST, done, handleUpload)`: браузер шлёт

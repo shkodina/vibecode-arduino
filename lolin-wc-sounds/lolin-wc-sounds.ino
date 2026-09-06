@@ -836,7 +836,7 @@ pre { background:#f4f4f4; padding:8px; overflow:auto; }
 async function loadStatus(){
   const s = await (await fetch('/api/status')).json();
   document.getElementById('status').textContent =
-    'Время: '+s.time+' | играет: '+s.playing+' | файл: '+(s.file||'-')+' | IP: '+s.ip;
+    'Время: '+s.time+' | играет: '+s.playing+' | ещё: '+(s.remaining_seconds||0)+'с | файл: '+(s.file||'-')+' | IP: '+s.ip;
 }
 async function loadCfg(){
   const c = await (await fetch('/api/config')).json();
@@ -935,7 +935,7 @@ code, pre { background:#f6f6f6; padding:2px 6px; }
 <body>
 <h1>WC Sounds API</h1>
 <p>OpenAPI-подобная страница. Базовый URL: этот модуль, порт 80.</p>
-<div class="ep"><b>GET /api/status</b><br>Состояние: время, играет ли, текущий файл, громкость, IP.</div>
+<div class="ep"><b>GET /api/status</b><br>Состояние: время, играет ли, remaining_seconds до тишины, текущий файл, громкость, IP.</div>
 <div class="ep"><b>POST /api/play</b><br>Запустить музыку по текущему расписанию.</div>
 <div class="ep"><b>POST /api/stop</b><br>Остановить музыку.</div>
 <div class="ep"><b>POST /api/volume?value=0..100</b><br>Громкость прямо сейчас. В config не пишет.</div>
@@ -986,6 +986,83 @@ void handleSwagger() {
   server.send_P(200, "text/html; charset=utf-8", SWAGGER_HTML);
 }
 
+int remainingAudioBytes() {
+  int left = wavDataBytesLeft;
+  if (left < 0) {
+    left = 0;
+  }
+  if (useBufA) {
+    if (playPos < bufALen) {
+      left += bufALen - playPos;
+    }
+    if (bufBLen > 0) {
+      left += bufBLen;
+    }
+  } else {
+    if (playPos < bufBLen) {
+      left += bufBLen - playPos;
+    }
+    if (bufALen > 0) {
+      left += bufALen;
+    }
+  }
+  return left;
+}
+
+int remainingWavSeconds() {
+  const int bytesPerSec = SAMPLE_RATE * WAV_CHANNELS * (WAV_BITS / 8);
+  int bytes = remainingAudioBytes();
+  if (bytes <= 0) {
+    return 0;
+  }
+  return (bytes + bytesPerSec - 1) / bytesPerSec;
+}
+
+int motionTimeoutLeftSeconds() {
+  if (cfg.motionTimeoutSec <= 0) {
+    return -1;
+  }
+  if (digitalRead(PIN_PIR) == HIGH) {
+    return cfg.motionTimeoutSec;
+  }
+  unsigned long now = millis();
+  unsigned long limitMs = (unsigned long)cfg.motionTimeoutSec * 1000UL;
+  unsigned long elapsed = now - lastMotionMs;
+  if (elapsed >= limitMs) {
+    return 0;
+  }
+  return (int)((limitMs - elapsed + 999UL) / 1000UL);
+}
+
+bool playbackWillContinuePastThisFile() {
+  if (currentPeriodIndex < 0 || currentPeriodIndex >= cfg.periodCount) {
+    return false;
+  }
+  Period p = cfg.periods[currentPeriodIndex];
+  if (p.repeatSelected || p.loopDirectory || p.shuffle) {
+    return true;
+  }
+  return fileIndex < fileCount - 1;
+}
+
+int remainingPlaySeconds() {
+  if (!playing) {
+    return 0;
+  }
+  int motionLeft = motionTimeoutLeftSeconds();
+  if (playbackWillContinuePastThisFile()) {
+    if (motionLeft >= 0) {
+      return motionLeft;
+    }
+    return remainingWavSeconds();
+  }
+  int wavLeft = remainingWavSeconds();
+  if (motionLeft < 0 || wavLeft < motionLeft) {
+    return wavLeft;
+  }
+  return motionLeft;
+}
+
 void handleStatus() {
   DynamicJsonDocument doc(1024);
   doc["time"] = currentTimeString();
@@ -998,6 +1075,7 @@ void handleStatus() {
   doc["wifi_sta"] = wifiStaOk;
   doc["ip"] = wifiStaOk ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
   doc["motion"] = digitalRead(PIN_PIR) == HIGH;
+  doc["remaining_seconds"] = remainingPlaySeconds();
   String out;
   serializeJson(doc, out);
   server.send(200, "application/json", out);

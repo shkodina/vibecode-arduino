@@ -129,7 +129,7 @@ function renderLeds(s) {
 function renderStatus(s) {
   $("d-ip").textContent = selectedHost;
   $("d-live").textContent =
-    `время ${s.time || "—"} · файл ${s.file || "—"} · папка ${s.directory || "—"} · громкость ${s.volume ?? "—"}`;
+    `время ${s.time || "—"} · ещё ${s.remaining_seconds ?? "—"} с · файл ${s.file || "—"} · папка ${s.directory || "—"} · громкость ${s.volume ?? "—"}`;
   renderLeds(s);
   if (typeof s.volume === "number") {
     $("live-vol").value = s.volume;
@@ -347,7 +347,7 @@ function renderModules(modules) {
     btn.className = "card" + (online ? "" : " offline");
     btn.dataset.host = m.host;
     const meta = online
-      ? `<span class="dot ${s.playing ? "play" : ""}"></span>${s.playing ? "играет" : "тишина"} · vol ${s.volume ?? "—"} · ${s.file || "нет файла"}`
+      ? `<span class="dot ${s.playing ? "play" : ""}"></span>${s.playing ? "играет" : "тишина"}${s.playing && s.remaining_seconds != null ? " " + s.remaining_seconds + "с" : ""} · vol ${s.volume ?? "—"} · ${s.file || "нет файла"}`
       : "недоступен";
     btn.innerHTML = `
       <span class="lamp ${online ? "" : "off"}" aria-hidden="true"></span>

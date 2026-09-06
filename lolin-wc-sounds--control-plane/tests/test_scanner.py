@@ -17,6 +17,23 @@ def test_status_json_from_firmware_is_a_module():
     assert looks_like_wc_sounds(status) is True
 
 
+def test_status_with_remaining_seconds_is_still_a_module():
+    status = {
+        "time": "12:00:00",
+        "time_ok": True,
+        "playing": True,
+        "file": "/data/bird.wav",
+        "directory": "/data",
+        "volume": 70,
+        "sd_ok": True,
+        "wifi_sta": True,
+        "ip": "192.168.1.42",
+        "motion": False,
+        "remaining_seconds": 18,
+    }
+    assert looks_like_wc_sounds(status) is True
+
+
 def test_random_http_json_is_not_a_module():
     assert looks_like_wc_sounds({"ok": True, "ip": "1.2.3.4"}) is False
     assert looks_like_wc_sounds({}) is False
