@@ -107,8 +107,9 @@ modules:                    # результат последнего полно
 Слева карточки модулей. Клик по **онлайн** открывает панель. Офлайн
 не открывается.
 
-Настройки модуля = поля `GET/POST /api/config` (wifi, ntp, motion,
-расписание кусками, не сырым JSON). Play/stop/volume/reload/reboot —
+Настройки модуля = поля `GET/POST /api/config` (wifi, ntp, motion:
+`timeout_seconds`, `cooldown_seconds`, `repeat_seconds`, `stable_ms`,
+`boot_ignore_seconds`; расписание кусками, не сырым JSON). Play/stop/volume/reload/reboot —
 как у платы. Volume «применить сейчас» не пишет config.
 
 Файлы: дерево от `/`, справа содержимое выбранной папки. «Обновить»

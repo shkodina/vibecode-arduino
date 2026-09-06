@@ -71,8 +71,25 @@
               <label>NTP сервер <input id="ntp"></label>
               <label>Часовой пояс, часы <input id="tz" type="number"></label>
               <label>Интервал NTP, сек <input id="ntpint" type="number"></label>
-              <label>Таймаут движения, сек <input id="mtime" type="number"></label>
-              <label>Пауза PIR, сек <input id="mcool" type="number"></label>
+              <label>Таймаут движения, сек
+                <input id="mtime" type="number" min="0" max="86400">
+                <span class="hint">сколько играть после принятого движения</span>
+              </label>
+              <label>Пауза PIR, сек
+                <input id="mcool" type="number" min="0" max="3600">
+                <span class="hint">пауза перед новым стартом play</span>
+              </label>
+              <label>Игнор повтора PIR, сек
+                <input id="mrep" type="number" min="0" max="300">
+                <span class="hint">импульс раньше этого = Delay модуля, не человек. 0 = выкл. Ванная с длинным Delay: 45–60</span>
+              </label>
+              <label>Стабильный HIGH, мс
+                <input id="mstab" type="number" min="50" max="5000">
+                <span class="hint">отсечь дребезг пина</span>
+              </label>
+              <label>Игнор PIR после ребута, сек
+                <input id="mboot" type="number" min="0" max="120">
+              </label>
             </div>
             <h4>Расписание</h4>
             <div id="schedule" class="schedule"></div>

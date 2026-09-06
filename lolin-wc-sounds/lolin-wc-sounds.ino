@@ -39,10 +39,8 @@ const int BUFFER_BYTES = 4096;
 const int MAX_SCHEDULE = 8;
 const int MAX_FILES_IN_DIR = 40;
 const int MAX_PATH = 64;
-// Движение: пин HIGH и без новых фронтов ≥400 мс (этот PIR держит ~1.5–2 с).
+// Пороги PIR (stable / repeat / boot ignore) — в config.json, блок motion.
 const int MOTION_STABLE_SAMPLES = 20;
-const unsigned long MOTION_STABLE_MS = 400;
-const unsigned long MOTION_BOOT_IGNORE_MS = 10000;
 const unsigned int MOTION_CHATTER_MAX_RISES = 6;
 const unsigned long MOTION_CHATTER_WINDOW_MS = 1000;
 const char *CONFIG_PATH = "/config.json";
@@ -71,6 +69,9 @@ struct Config {
   int httpPort;
   int motionTimeoutSec;
   int motionCooldownSec;
+  int motionRepeatSec;
+  int motionStableMs;
+  int motionBootIgnoreSec;
   Period periods[MAX_SCHEDULE];
   int periodCount;
 };
@@ -92,6 +93,8 @@ unsigned long lastRawHighDurationMs = 0;
 unsigned long lastRiseMs = 0;
 unsigned long chatterWindowStartMs = 0;
 unsigned int chatterRises = 0;
+unsigned long lastPulseMs = 0;
+bool motionHoldOk = false;
 bool motionSawHigh = false;
 bool motionActive = false;
 bool motionRawHigh = false;
@@ -153,6 +156,16 @@ void logMsg(const char *text) {
     return;
   }
   Serial.println(text);
+}
+
+int clampRange(int v, int lo, int hi) {
+  if (v < lo) {
+    return lo;
+  }
+  if (v > hi) {
+    return hi;
+  }
+  return v;
 }
 
 int clampVolume(int v) {
@@ -296,6 +309,9 @@ void setDefaultConfig() {
   cfg.httpPort = 80;
   cfg.motionTimeoutSec = 30;
   cfg.motionCooldownSec = 5;
+  cfg.motionRepeatSec = 15;
+  cfg.motionStableMs = 400;
+  cfg.motionBootIgnoreSec = 10;
   cfg.periodCount = 1;
   cfg.periods[0].startMin = 0;
   cfg.periods[0].endMin = 24 * 60;
@@ -339,10 +355,19 @@ bool parseConfigJson(const String &jsonText) {
     cfg.httpPort = doc["server"]["port"];
   }
   if (doc["motion"]["timeout_seconds"].is<int>()) {
-    cfg.motionTimeoutSec = doc["motion"]["timeout_seconds"];
+    cfg.motionTimeoutSec = clampRange(doc["motion"]["timeout_seconds"], 0, 86400);
   }
   if (doc["motion"]["cooldown_seconds"].is<int>()) {
-    cfg.motionCooldownSec = doc["motion"]["cooldown_seconds"];
+    cfg.motionCooldownSec = clampRange(doc["motion"]["cooldown_seconds"], 0, 3600);
+  }
+  if (doc["motion"]["repeat_seconds"].is<int>()) {
+    cfg.motionRepeatSec = clampRange(doc["motion"]["repeat_seconds"], 0, 300);
+  }
+  if (doc["motion"]["stable_ms"].is<int>()) {
+    cfg.motionStableMs = clampRange(doc["motion"]["stable_ms"], 50, 5000);
+  }
+  if (doc["motion"]["boot_ignore_seconds"].is<int>()) {
+    cfg.motionBootIgnoreSec = clampRange(doc["motion"]["boot_ignore_seconds"], 0, 120);
   }
 
   JsonArray schedule = doc["playback"]["schedule"].as<JsonArray>();
@@ -381,6 +406,9 @@ String buildConfigJson() {
   doc["server"]["port"] = cfg.httpPort;
   doc["motion"]["timeout_seconds"] = cfg.motionTimeoutSec;
   doc["motion"]["cooldown_seconds"] = cfg.motionCooldownSec;
+  doc["motion"]["repeat_seconds"] = cfg.motionRepeatSec;
+  doc["motion"]["stable_ms"] = cfg.motionStableMs;
+  doc["motion"]["boot_ignore_seconds"] = cfg.motionBootIgnoreSec;
   doc["logging"]["level"] = "INFO";
   doc["playback"]["type"] = "files";
   JsonArray schedule = doc["playback"].createNestedArray("schedule");
@@ -835,8 +863,21 @@ pre { background:#f4f4f4; padding:8px; overflow:auto; }
   <label>NTP сервер <input id="ntp"></label>
   <label>Часовой пояс, часы <input id="tz" type="number"></label>
   <label>Интервал NTP, сек <input id="ntpint" type="number"></label>
-  <label>Таймаут движения, сек <input id="mtime" type="number"></label>
-  <label>Пауза между срабатываниями, сек <input id="mcool" type="number"></label>
+  <label>Таймаут движения, сек — сколько играть после принятого движения
+    <input id="mtime" type="number" min="0" max="86400">
+  </label>
+  <label>Пауза между стартами, сек
+    <input id="mcool" type="number" min="0" max="3600">
+  </label>
+  <label>Игнор повтора PIR, сек — импульс раньше этого = Delay модуля, не человек. 0 = выкл
+    <input id="mrep" type="number" min="0" max="300">
+  </label>
+  <label>Стабильный HIGH, мс — отсечь дребезг пина
+    <input id="mstab" type="number" min="50" max="5000">
+  </label>
+  <label>Игнор PIR после ребута, сек
+    <input id="mboot" type="number" min="0" max="120">
+  </label>
   <h3>Расписание (JSON)</h3>
   <textarea id="schedule" rows="14" style="width:100%"></textarea>
   <p><button onclick="saveCfg()">Сохранить config.json</button></p>
@@ -868,8 +909,11 @@ async function loadCfg(){
   document.getElementById('ntp').value = c.ntp.server||'';
   document.getElementById('tz').value = c.ntp.timezone_offset||0;
   document.getElementById('ntpint').value = c.ntp.update_interval||3600;
-  document.getElementById('mtime').value = c.motion.timeout_seconds||30;
-  document.getElementById('mcool').value = c.motion.cooldown_seconds||5;
+  document.getElementById('mtime').value = c.motion.timeout_seconds??30;
+  document.getElementById('mcool').value = c.motion.cooldown_seconds??5;
+  document.getElementById('mrep').value = c.motion.repeat_seconds??15;
+  document.getElementById('mstab').value = c.motion.stable_ms??400;
+  document.getElementById('mboot').value = c.motion.boot_ignore_seconds??10;
   document.getElementById('vol').value = (c.playback.schedule[0]||{}).volume||100;
   document.getElementById('schedule').value = JSON.stringify(c.playback.schedule, null, 2);
 }
@@ -911,7 +955,10 @@ async function saveCfg(){
     server:{port:80},
     motion:{
       timeout_seconds:Number(document.getElementById('mtime').value),
-      cooldown_seconds:Number(document.getElementById('mcool').value)
+      cooldown_seconds:Number(document.getElementById('mcool').value),
+      repeat_seconds:Number(document.getElementById('mrep').value),
+      stable_ms:Number(document.getElementById('mstab').value),
+      boot_ignore_seconds:Number(document.getElementById('mboot').value)
     },
     logging:{level:'INFO'},
     playback:{type:'files', schedule: JSON.parse(document.getElementById('schedule').value)}
@@ -962,7 +1009,7 @@ code, pre { background:#f6f6f6; padding:2px 6px; }
 <div class="ep"><b>POST /api/play</b><br>Запустить музыку по текущему расписанию.</div>
 <div class="ep"><b>POST /api/stop</b><br>Остановить музыку.</div>
 <div class="ep"><b>POST /api/volume?value=0..100</b><br>Громкость прямо сейчас. В config не пишет.</div>
-<div class="ep"><b>GET /api/config</b><br>Текущий config.json.</div>
+<div class="ep"><b>GET /api/config</b><br>Текущий config.json, в т.ч. motion.timeout_seconds / cooldown_seconds / repeat_seconds / stable_ms / boot_ignore_seconds.</div>
 <div class="ep"><b>POST /api/config</b><br>Тело: JSON конфигурации. Пишет на SD в /config.json и применяет сразу.</div>
 <div class="ep"><b>POST /api/reload</b><br>Перечитать /config.json с карты. WiFi не переподключает.</div>
 <div class="ep"><b>POST /api/reboot</b><br>Отвечает ok и зависает: hardware watchdog сбрасывает плату.</div>
@@ -1056,7 +1103,7 @@ int motionTimeoutLeftSeconds() {
 
 void updateMotion(unsigned long now) {
   motionRawHigh = digitalRead(PIN_PIR) == HIGH;
-  if (now < MOTION_BOOT_IGNORE_MS) {
+  if (cfg.motionBootIgnoreSec > 0 && now < (unsigned long)cfg.motionBootIgnoreSec * 1000UL) {
     motionSawHigh = false;
     motionHighStartMs = 0;
     motionHighSamples = 0;
@@ -1087,7 +1134,7 @@ void updateMotion(unsigned long now) {
     }
     // Наводка: частые фронты. Живой PIR: после дребезга пин спокойно стоит HIGH.
     motionActive = (motionHighSamples >= MOTION_STABLE_SAMPLES) &&
-                   (now - lastRiseMs >= MOTION_STABLE_MS);
+                   (now - lastRiseMs >= (unsigned long)cfg.motionStableMs);
   } else {
     if (motionSawHigh) {
       lastRawHighDurationMs = now - motionHighStartMs;
@@ -1140,9 +1187,10 @@ void handleStatus() {
   doc["sd_ok"] = sdOk;
   doc["wifi_sta"] = wifiStaOk;
   doc["ip"] = wifiStaOk ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
-  doc["motion"] = motionActive;
+  doc["motion"] = motionActive && motionHoldOk;
   doc["motion_raw"] = motionRawHigh;
   doc["motion_chatter"] = motionChatter;
+  doc["motion_repeat"] = motionActive && !motionHoldOk;
   doc["remaining_seconds"] = remainingPlaySeconds();
   doc["uptime_s"] = millis() / 1000UL;
   doc["pir_rises"] = pirRiseCount;
@@ -1489,16 +1537,26 @@ void loop() {
 
   bool wasMotion = motionActive;
   updateMotion(now);
-  bool motionOk = motionActive && (now >= ignoreMotionUntilMs);
-  if (motionOk) {
-    lastMotionMs = now;
-    if (!playing && now - lastTriggerMs > (unsigned long)cfg.motionCooldownSec * 1000UL) {
-      lastTriggerMs = now;
-      playRequested = true;
-    }
+  bool gated = motionActive && (now >= ignoreMotionUntilMs);
+  if (gated) {
     if (!wasMotion) {
-      pirConfirmedCount++;
+      bool accepted = (cfg.motionRepeatSec <= 0) || (lastPulseMs == 0) ||
+                      (now - lastPulseMs > (unsigned long)cfg.motionRepeatSec * 1000UL);
+      lastPulseMs = now;
+      motionHoldOk = accepted;
+      if (accepted) {
+        pirConfirmedCount++;
+        lastMotionMs = now;
+        if (!playing && now - lastTriggerMs > (unsigned long)cfg.motionCooldownSec * 1000UL) {
+          lastTriggerMs = now;
+          playRequested = true;
+        }
+      }
+    } else if (motionHoldOk) {
+      lastMotionMs = now;
     }
+  } else {
+    motionHoldOk = false;
   }
   if (playing && cfg.motionTimeoutSec > 0 && now - lastMotionMs > (unsigned long)cfg.motionTimeoutSec * 1000UL) {
     stopRequested = true;
