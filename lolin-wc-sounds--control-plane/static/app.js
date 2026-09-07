@@ -148,6 +148,7 @@ function renderConfig(c) {
   $("mtime").value = c.motion?.timeout_seconds ?? 30;
   $("mcool").value = c.motion?.cooldown_seconds ?? 5;
   $("mrep").value = c.motion?.repeat_seconds ?? 15;
+  $("midle").value = c.motion?.idle_repeat_seconds ?? 15;
   $("mstab").value = c.motion?.stable_ms ?? 400;
   $("mboot").value = c.motion?.boot_ignore_seconds ?? 10;
   const box = $("schedule");
@@ -428,6 +429,7 @@ $("save-cfg").onclick = async () => {
       timeout_seconds: Number($("mtime").value),
       cooldown_seconds: Number($("mcool").value),
       repeat_seconds: Number($("mrep").value),
+      idle_repeat_seconds: Number($("midle").value),
       stable_ms: Number($("mstab").value),
       boot_ignore_seconds: Number($("mboot").value),
     },

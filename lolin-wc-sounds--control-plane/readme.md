@@ -108,7 +108,7 @@ modules:                    # результат последнего полно
 не открывается.
 
 Настройки модуля = поля `GET/POST /api/config` (wifi, ntp, motion:
-`timeout_seconds`, `cooldown_seconds`, `repeat_seconds`, `stable_ms`,
+`timeout_seconds`, `cooldown_seconds`, `repeat_seconds`, `idle_repeat_seconds`, `stable_ms`,
 `boot_ignore_seconds`; расписание кусками, не сырым JSON). Play/stop/volume/reload/reboot —
 как у платы. Volume «применить сейчас» не пишет config.
 

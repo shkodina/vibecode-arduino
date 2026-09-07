@@ -15,6 +15,7 @@
     "timeout_seconds": 30,
     "cooldown_seconds": 5,
     "repeat_seconds": 15,
+    "idle_repeat_seconds": 15,
     "stable_ms": 400,
     "boot_ignore_seconds": 10
   },

@@ -79,9 +79,13 @@
                 <input id="mcool" type="number" min="0" max="3600">
                 <span class="hint">пауза перед новым стартом play</span>
               </label>
-              <label>Игнор повтора PIR, сек
+              <label>Игнор повтора пока играет, сек
                 <input id="mrep" type="number" min="0" max="300">
-                <span class="hint">импульс раньше этого = Delay модуля, не человек. 0 = выкл. Ванная с длинным Delay: 45–60</span>
+                <span class="hint">не продлевать таймер этими импульсами. 0 = выкл</span>
+              </label>
+              <label>Игнор повтора в тишине, сек
+                <input id="midle" type="number" min="0" max="300">
+                <span class="hint">не включать звук. чуть больше цикла Delay в пустой комнате. 0 = выкл</span>
               </label>
               <label>Стабильный HIGH, мс
                 <input id="mstab" type="number" min="50" max="5000">

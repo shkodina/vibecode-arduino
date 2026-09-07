@@ -70,6 +70,7 @@ struct Config {
   int motionTimeoutSec;
   int motionCooldownSec;
   int motionRepeatSec;
+  int motionIdleRepeatSec;
   int motionStableMs;
   int motionBootIgnoreSec;
   Period periods[MAX_SCHEDULE];
@@ -310,6 +311,7 @@ void setDefaultConfig() {
   cfg.motionTimeoutSec = 30;
   cfg.motionCooldownSec = 5;
   cfg.motionRepeatSec = 15;
+  cfg.motionIdleRepeatSec = 15;
   cfg.motionStableMs = 400;
   cfg.motionBootIgnoreSec = 10;
   cfg.periodCount = 1;
@@ -363,6 +365,9 @@ bool parseConfigJson(const String &jsonText) {
   if (doc["motion"]["repeat_seconds"].is<int>()) {
     cfg.motionRepeatSec = clampRange(doc["motion"]["repeat_seconds"], 0, 300);
   }
+  if (doc["motion"]["idle_repeat_seconds"].is<int>()) {
+    cfg.motionIdleRepeatSec = clampRange(doc["motion"]["idle_repeat_seconds"], 0, 300);
+  }
   if (doc["motion"]["stable_ms"].is<int>()) {
     cfg.motionStableMs = clampRange(doc["motion"]["stable_ms"], 50, 5000);
   }
@@ -407,6 +412,7 @@ String buildConfigJson() {
   doc["motion"]["timeout_seconds"] = cfg.motionTimeoutSec;
   doc["motion"]["cooldown_seconds"] = cfg.motionCooldownSec;
   doc["motion"]["repeat_seconds"] = cfg.motionRepeatSec;
+  doc["motion"]["idle_repeat_seconds"] = cfg.motionIdleRepeatSec;
   doc["motion"]["stable_ms"] = cfg.motionStableMs;
   doc["motion"]["boot_ignore_seconds"] = cfg.motionBootIgnoreSec;
   doc["logging"]["level"] = "INFO";
@@ -698,6 +704,7 @@ void startPlayback() {
 void stopPlayback() {
   playing = false;
   stopRequested = false;
+  motionHoldOk = false;
   closeWav();
   i2s_end();
   logMsg("Stop");
@@ -869,8 +876,11 @@ pre { background:#f4f4f4; padding:8px; overflow:auto; }
   <label>Пауза между стартами, сек
     <input id="mcool" type="number" min="0" max="3600">
   </label>
-  <label>Игнор повтора PIR, сек — импульс раньше этого = Delay модуля, не человек. 0 = выкл
+  <label>Игнор повтора PIR пока играет, сек — не продлевать таймер. 0 = выкл
     <input id="mrep" type="number" min="0" max="300">
+  </label>
+  <label>Игнор повтора PIR в тишине, сек — не включать звук. Чуть больше цикла Delay в пустой комнате. 0 = выкл
+    <input id="midle" type="number" min="0" max="300">
   </label>
   <label>Стабильный HIGH, мс — отсечь дребезг пина
     <input id="mstab" type="number" min="50" max="5000">
@@ -912,6 +922,7 @@ async function loadCfg(){
   document.getElementById('mtime').value = c.motion.timeout_seconds??30;
   document.getElementById('mcool').value = c.motion.cooldown_seconds??5;
   document.getElementById('mrep').value = c.motion.repeat_seconds??15;
+  document.getElementById('midle').value = c.motion.idle_repeat_seconds??15;
   document.getElementById('mstab').value = c.motion.stable_ms??400;
   document.getElementById('mboot').value = c.motion.boot_ignore_seconds??10;
   document.getElementById('vol').value = (c.playback.schedule[0]||{}).volume||100;
@@ -957,6 +968,7 @@ async function saveCfg(){
       timeout_seconds:Number(document.getElementById('mtime').value),
       cooldown_seconds:Number(document.getElementById('mcool').value),
       repeat_seconds:Number(document.getElementById('mrep').value),
+      idle_repeat_seconds:Number(document.getElementById('midle').value),
       stable_ms:Number(document.getElementById('mstab').value),
       boot_ignore_seconds:Number(document.getElementById('mboot').value)
     },
@@ -1009,7 +1021,7 @@ code, pre { background:#f6f6f6; padding:2px 6px; }
 <div class="ep"><b>POST /api/play</b><br>Запустить музыку по текущему расписанию.</div>
 <div class="ep"><b>POST /api/stop</b><br>Остановить музыку.</div>
 <div class="ep"><b>POST /api/volume?value=0..100</b><br>Громкость прямо сейчас. В config не пишет.</div>
-<div class="ep"><b>GET /api/config</b><br>Текущий config.json, в т.ч. motion.timeout_seconds / cooldown_seconds / repeat_seconds / stable_ms / boot_ignore_seconds.</div>
+<div class="ep"><b>GET /api/config</b><br>Текущий config.json, в т.ч. motion.timeout_seconds / cooldown_seconds / repeat_seconds / idle_repeat_seconds / stable_ms / boot_ignore_seconds.</div>
 <div class="ep"><b>POST /api/config</b><br>Тело: JSON конфигурации. Пишет на SD в /config.json и применяет сразу.</div>
 <div class="ep"><b>POST /api/reload</b><br>Перечитать /config.json с карты. WiFi не переподключает.</div>
 <div class="ep"><b>POST /api/reboot</b><br>Отвечает ok и зависает: hardware watchdog сбрасывает плату.</div>
@@ -1540,9 +1552,10 @@ void loop() {
   bool gated = motionActive && (now >= ignoreMotionUntilMs);
   if (gated) {
     if (!wasMotion) {
-      bool accepted = (cfg.motionRepeatSec <= 0) || (lastPulseMs == 0) ||
-                      (now - lastPulseMs > (unsigned long)cfg.motionRepeatSec * 1000UL);
+      unsigned long gapMs = (lastPulseMs == 0) ? 4294967295UL : (now - lastPulseMs);
       lastPulseMs = now;
+      int windowSec = playing ? cfg.motionRepeatSec : cfg.motionIdleRepeatSec;
+      bool accepted = (windowSec <= 0) || (gapMs > (unsigned long)windowSec * 1000UL);
       motionHoldOk = accepted;
       if (accepted) {
         pirConfirmedCount++;
