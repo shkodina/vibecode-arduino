@@ -160,7 +160,8 @@ GND ---------------------- GND
     "timezone_offset": 3,
     "update_interval": 3600
   },
-  "server": { "port": 80 },
+  "server": { "port": 80, "watchdog_seconds": 30 },
+  "watchdog_seconds": 30,
   "motion": {
     "timeout_seconds": 30,
     "cooldown_seconds": 5,
@@ -252,7 +253,8 @@ yq -o json config.yaml > config.json
 | `POST /api/stop`                              | выключить                          |
 | `POST /api/volume?value=70`                   | громкость сейчас (в файл не пишет) |
 | `GET /api/config`                             | текущий конфиг                     |
-| `POST /api/config`                            | тело JSON, пишет `/config.json`    |
+| `POST /api/config`                            | JSON → `/config.json`; старый копируется в `/config.bak.json` |
+| `POST /api/config/restore`                    | `/config.bak.json` → `/config.json` и применить |
 | `POST /api/reload`                            | перечитать `/config.json`, WiFi не рвать |
 | `POST /api/reboot`                            | ответ ok, затем зависание → watchdog reset |
 | `GET /api/files?path=/`                       | одна папка, не рекурсивно: `{path, entries:[{name,type,size?}]}` |
@@ -283,10 +285,14 @@ PCM 16 kHz 16-bit mono. Иначе 400.
 сети — после перезагрузки** платы (кнопка RST или `POST /api/reboot`).
 Так проще и нет обрыва в середине сохранения.
 
-`POST /api/reload` только перечитывает карту. Watchdog кормится в `loop`,
-при I2S и при upload WRITE. Если прошивка залипнет — плата сама
-перезапустится примерно через 8 с. Кнопка «Перезагрузить» специально
-зависает, чтобы сработал тот же watchdog.
+`POST /api/reload` только перечитывает карту. Watchdog (~`watchdog_seconds`,
+по умолчанию 30) кормится в `loop`, при I2S реже, при upload/SD с `yield`.
+При старте и после reboot прошивка пишет `list.txt` в каждой папке на SD —
+shuffle читает список оттуда, без повторного `openNextFile` на каждый трек.
+Кнопка «Перезагрузить» специально зависает, чтобы сработал тот же watchdog.
+`POST /api/config` сначала копирует текущий файл в `/config.bak.json`, потом
+пишет новый через tmp. «Восстановить прежний» / `POST /api/config/restore`
+возвращает bak.
 
 Загрузка чужого wav: если не 16-bit / не 16 kHz / не mono — ответ 400
 с текстом вроде:

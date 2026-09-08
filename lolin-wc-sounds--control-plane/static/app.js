@@ -151,6 +151,7 @@ function renderConfig(c) {
   $("midle").value = c.motion?.idle_repeat_seconds ?? 15;
   $("mstab").value = c.motion?.stable_ms ?? 400;
   $("mboot").value = c.motion?.boot_ignore_seconds ?? 10;
+  $("mwdt").value = c.watchdog_seconds ?? c.server?.watchdog_seconds ?? 30;
   const box = $("schedule");
   box.innerHTML = "";
   (c.playback?.schedule || []).forEach((p, i) => box.appendChild(periodCard(p, i)));
@@ -416,6 +417,9 @@ document.querySelector(".toolbar").addEventListener("click", async (ev) => {
 
 $("save-cfg").onclick = async () => {
   if (!selectedHost || !lastConfig) return;
+  const btn = $("save-cfg");
+  if (btn.disabled) return;
+  const note = $("cfg-flash");
   const body = {
     ...lastConfig,
     wifi: { ssid: $("ssid").value, password: $("pass").value },
@@ -424,6 +428,12 @@ $("save-cfg").onclick = async () => {
       timezone_offset: Number($("tz").value),
       update_interval: Number($("ntpint").value),
     },
+    server: {
+      ...(lastConfig.server || {}),
+      port: (lastConfig.server && lastConfig.server.port) || 80,
+      watchdog_seconds: Number($("mwdt").value),
+    },
+    watchdog_seconds: Number($("mwdt").value),
     motion: {
       ...(lastConfig.motion || {}),
       timeout_seconds: Number($("mtime").value),
@@ -435,14 +445,52 @@ $("save-cfg").onclick = async () => {
     },
     playback: { ...(lastConfig.playback || {}), schedule: readSchedule() },
   };
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = "Сохраняю…";
+  note.hidden = false;
+  note.textContent = "Пишу config.json на модуль (бэкап → config.bak.json)…";
   try {
     const fd = await fetch(`/api/modules/${selectedHost}/config`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    flash(await fd.text());
-  } catch (e) { flash(e.message); }
+    const text = await fd.text();
+    note.textContent = text;
+    if (!fd.ok) throw new Error(text);
+    lastConfig = body;
+    flash(text);
+  } catch (e) {
+    note.textContent = e.message;
+    flash(e.message);
+  }
+  btn.disabled = false;
+  btn.textContent = old;
+};
+
+$("restore-cfg").onclick = async () => {
+  if (!selectedHost) return;
+  if (!confirm("Восстановить предыдущий config.bak.json на модуле?")) return;
+  const btn = $("restore-cfg");
+  if (btn.disabled) return;
+  const note = $("cfg-flash");
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = "Восстанавливаю…";
+  note.hidden = false;
+  note.textContent = "Восстановление из config.bak.json…";
+  try {
+    const text = await api(`/api/modules/${selectedHost}/config/restore`, { method: "POST" });
+    note.textContent = typeof text === "string" ? text : JSON.stringify(text);
+    flash(note.textContent);
+    renderConfig(await api(`/api/modules/${selectedHost}/config`));
+  } catch (e) {
+    note.textContent = e.message;
+    flash(e.message);
+  }
+  btn.disabled = false;
+  btn.textContent = old;
 };
 
 $("list-files").onclick = () => loadFiles(true).catch((e) => flash(e.message));

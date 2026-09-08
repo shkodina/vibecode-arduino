@@ -145,6 +145,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             headers={"Content-Type": "application/json"},
         )
 
+    @app.post("/api/modules/{host}/config/restore")
+    async def module_restore_config(host: str) -> Response:
+        _require_host(settings, host)
+        return await _forward(host, settings.scan_port, "POST", "/api/config/restore")
+
     @app.post("/api/modules/{host}/reload")
     async def module_reload(host: str) -> Response:
         _require_host(settings, host)

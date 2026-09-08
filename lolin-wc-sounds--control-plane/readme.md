@@ -140,6 +140,7 @@ HTTP-заголовок `Content-Disposition` **нельзя** заполнят�
 | GET | `/api/known` | проверка модулей из yaml |
 | POST | `/api/scan` | полный скан + запись yaml |
 | GET/POST | `/api/modules/{ip}/...` | прокси API платы |
+| POST | `/api/modules/{ip}/config/restore` | восстановить `config.bak.json` на плате |
 | POST | `/api/analyze` | разобрать аудио |
 | POST | `/api/convert` | ffmpeg → WAV модуля |
 
@@ -160,11 +161,10 @@ Upload: `POST /api/upload?path=/water/a.wav`, тело — multipart `file`,
 содержимое — WAV PCM 16 kHz 16-bit mono. Прошивка смотрит первые 44 байта
 как RIFF. Иначе 400 с транслитом ошибки латиницей.
 
-Watchdog платы ~8 с. Старые прошивки во время длинного upload не кормили
-WDT и уходили в reboot (у control plane это выглядело как 502, потом
-статус тоже 502, через ~10 с модуль оживал). В прошивке от 2026-09-05
-в `handleUpload` WRITE есть `ESP.wdtFeed()` + `yield()`. Без этой
-прошивки большие wav лучше не лить по вебу.
+Watchdog платы ~`watchdog_seconds` (по умолчанию 30). Старые прошивки во
+время длинного upload не кормили WDT и уходили в reboot (у control plane
+это выглядело как 502). В актуальной прошивке upload/SD кормят WDT с
+`yield`, shuffle читает `list.txt`, сохранение config пишет bak.
 
 Смена WiFi в config применяется сразу в RAM, **к новой сети плата
 подключится только после reboot**.

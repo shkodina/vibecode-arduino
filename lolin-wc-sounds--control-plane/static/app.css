@@ -80,6 +80,8 @@ button.danger {
   color: #ffb4ab;
 }
 button:disabled { opacity: 0.5; cursor: wait; }
+.cfg-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+#cfg-flash { margin-top: 10px; }
 
 .layout {
   display: grid;

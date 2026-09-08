@@ -3,6 +3,8 @@
 # timezone_offset: 3 значит UTC+3 (Москва). Строку Europe/Moscow ESP не понимает.
 server:
   port: 80
+  watchdog_seconds: 30
+watchdog_seconds: 30
 ntp:
   server: "pool.ntp.org"
   timezone_offset: 3

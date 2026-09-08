@@ -37,13 +37,16 @@ const int WAV_BITS = 16;
 const int WAV_CHANNELS = 1;
 const int BUFFER_BYTES = 4096;
 const int MAX_SCHEDULE = 8;
-const int MAX_FILES_IN_DIR = 40;
+const int MAX_FILES_IN_DIR = 64;
 const int MAX_PATH = 64;
 // Пороги PIR (stable / repeat / boot ignore) — в config.json, блок motion.
 const int MOTION_STABLE_SAMPLES = 20;
 const unsigned int MOTION_CHATTER_MAX_RISES = 6;
 const unsigned long MOTION_CHATTER_WINDOW_MS = 1000;
 const char *CONFIG_PATH = "/config.json";
+const char *CONFIG_BAK_PATH = "/config.bak.json";
+const char *CONFIG_TMP_PATH = "/config.tmp.json";
+const char *LIST_NAME = "list.txt";
 const char *FALLBACK_SSID = "WC-Sounds";
 const char *FALLBACK_PASS = "wcsounds1";
 
@@ -73,6 +76,7 @@ struct Config {
   int motionIdleRepeatSec;
   int motionStableMs;
   int motionBootIgnoreSec;
+  int watchdogSeconds;
   Period periods[MAX_SCHEDULE];
   int periodCount;
 };
@@ -118,6 +122,10 @@ int playPos = 0;
 char fileList[MAX_FILES_IN_DIR][MAX_PATH];
 int fileCount = 0;
 int fileIndex = 0;
+char pendingListDirs[16][MAX_PATH];
+int pendingListCount = 0;
+int pendingListIndex = 0;
+bool pendingListsActive = false;
 String uploadTargetPath;
 bool uploadOk = false;
 String uploadError;
@@ -125,6 +133,15 @@ int uploadBytes = 0;
 uint8_t wavHeaderBuf[44];
 int wavHeaderGot = 0;
 bool wavHeaderChecked = false;
+
+void feedWatchdog();
+void applyWatchdogFromConfig();
+bool reinitSd();
+bool copySdFile(const char *fromPath, const char *toPath);
+bool restoreConfigFromBak();
+void refreshAllDirLists();
+void refreshParentListForPath(const String &path);
+bool writeDirListFile(const char *dirPath);
 
 // ---------- pomoshniki ----------
 
@@ -314,6 +331,7 @@ void setDefaultConfig() {
   cfg.motionIdleRepeatSec = 15;
   cfg.motionStableMs = 400;
   cfg.motionBootIgnoreSec = 10;
+  cfg.watchdogSeconds = 30;
   cfg.periodCount = 1;
   cfg.periods[0].startMin = 0;
   cfg.periods[0].endMin = 24 * 60;
@@ -374,6 +392,11 @@ bool parseConfigJson(const String &jsonText) {
   if (doc["motion"]["boot_ignore_seconds"].is<int>()) {
     cfg.motionBootIgnoreSec = clampRange(doc["motion"]["boot_ignore_seconds"], 0, 120);
   }
+  if (doc["watchdog_seconds"].is<int>()) {
+    cfg.watchdogSeconds = clampRange(doc["watchdog_seconds"], 8, 60);
+  } else if (doc["server"]["watchdog_seconds"].is<int>()) {
+    cfg.watchdogSeconds = clampRange(doc["server"]["watchdog_seconds"], 8, 60);
+  }
 
   JsonArray schedule = doc["playback"]["schedule"].as<JsonArray>();
   cfg.periodCount = 0;
@@ -409,6 +432,8 @@ String buildConfigJson() {
   doc["ntp"]["timezone_offset"] = cfg.timezoneOffsetHours;
   doc["ntp"]["update_interval"] = cfg.ntpUpdateSeconds;
   doc["server"]["port"] = cfg.httpPort;
+  doc["server"]["watchdog_seconds"] = cfg.watchdogSeconds;
+  doc["watchdog_seconds"] = cfg.watchdogSeconds;
   doc["motion"]["timeout_seconds"] = cfg.motionTimeoutSec;
   doc["motion"]["cooldown_seconds"] = cfg.motionCooldownSec;
   doc["motion"]["repeat_seconds"] = cfg.motionRepeatSec;
@@ -443,18 +468,49 @@ bool saveConfigToSd() {
   if (!sdOk) {
     return false;
   }
+  String json = buildConfigJson();
+  feedWatchdog();
+  if (SD.exists(CONFIG_PATH)) {
+    // Старую не удаляем вслепую: сначала бэкап.
+    copySdFile(CONFIG_PATH, CONFIG_BAK_PATH);
+  }
+  feedWatchdog();
+  if (SD.exists(CONFIG_TMP_PATH)) {
+    SD.remove(CONFIG_TMP_PATH);
+  }
+  File f = SD.open(CONFIG_TMP_PATH, FILE_WRITE);
+  if (!f) {
+    logMsg("Ne smog zapisat config.tmp.json");
+    return false;
+  }
+  f.print(json);
+  f.close();
+  feedWatchdog();
   if (SD.exists(CONFIG_PATH)) {
     SD.remove(CONFIG_PATH);
   }
-  File f = SD.open(CONFIG_PATH, FILE_WRITE);
-  if (!f) {
-    logMsg("Ne smog zapisat config.json");
+  if (!copySdFile(CONFIG_TMP_PATH, CONFIG_PATH)) {
+    logMsg("Ne smog zapisat config.json, prouyu bak");
+    if (SD.exists(CONFIG_BAK_PATH)) {
+      copySdFile(CONFIG_BAK_PATH, CONFIG_PATH);
+    }
     return false;
   }
-  String json = buildConfigJson();
-  f.print(json);
-  f.close();
+  SD.remove(CONFIG_TMP_PATH);
   return true;
+}
+
+bool restoreConfigFromBak() {
+  if (!sdOk) {
+    return false;
+  }
+  if (!SD.exists(CONFIG_BAK_PATH)) {
+    return false;
+  }
+  if (!copySdFile(CONFIG_BAK_PATH, CONFIG_PATH)) {
+    return false;
+  }
+  return loadConfigFromSd();
 }
 
 bool loadConfigFromSd() {
@@ -470,6 +526,11 @@ bool loadConfigFromSd() {
   }
   String json = f.readString();
   f.close();
+  feedWatchdog();
+  if (json.length() < 8) {
+    logMsg("config.json pustoy");
+    return false;
+  }
   return parseConfigJson(json);
 }
 
@@ -537,6 +598,308 @@ String currentTimeString() {
 
 // ---------- SD i spisok faylov ----------
 
+void feedWatchdog() {
+  ESP.wdtFeed();
+  yield();
+}
+
+void applyWatchdogFromConfig() {
+  int sec = cfg.watchdogSeconds;
+  if (sec < 8) {
+    sec = 8;
+  }
+  if (sec > 60) {
+    sec = 60;
+  }
+  cfg.watchdogSeconds = sec;
+  // На ESP8266 таймаут HW WDT ядром часто игнорируется; кормим реже + yield на SD.
+  ESP.wdtEnable((uint32_t)sec * 1000UL);
+}
+
+bool reinitSd() {
+  feedWatchdog();
+  SD.end();
+  delay(50);
+  SPI.begin();
+  sdOk = SD.begin(PIN_SD_CS);
+  feedWatchdog();
+  if (sdOk) {
+    logMsg("SD reinit ok");
+  } else {
+    logMsg("SD reinit fail");
+  }
+  return sdOk;
+}
+
+bool copySdFile(const char *fromPath, const char *toPath) {
+  File src = SD.open(fromPath, FILE_READ);
+  if (!src) {
+    return false;
+  }
+  if (SD.exists(toPath)) {
+    SD.remove(toPath);
+  }
+  File dst = SD.open(toPath, FILE_WRITE);
+  if (!dst) {
+    src.close();
+    return false;
+  }
+  uint8_t buf[256];
+  while (true) {
+    int n = src.read(buf, sizeof(buf));
+    if (n <= 0) {
+      break;
+    }
+    dst.write(buf, n);
+    feedWatchdog();
+  }
+  src.close();
+  dst.close();
+  return true;
+}
+
+String dirListPath(const char *dirPath) {
+  if (dirPath == NULL || dirPath[0] == 0 || strcmp(dirPath, "/") == 0) {
+    return String("/") + LIST_NAME;
+  }
+  String p = String(dirPath);
+  if (p.endsWith("/")) {
+    return p + LIST_NAME;
+  }
+  return p + "/" + LIST_NAME;
+}
+
+String baseNameOnly(const String &name) {
+  int slash = name.lastIndexOf('/');
+  if (slash < 0) {
+    return name;
+  }
+  return name.substring(slash + 1);
+}
+
+bool isIgnoredDirEntry(const String &name) {
+  String base = baseNameOnly(name);
+  if (base.equalsIgnoreCase(LIST_NAME)) {
+    return true;
+  }
+  if (base.equalsIgnoreCase("System Volume Information")) {
+    return true;
+  }
+  if (base.equalsIgnoreCase("config.json") || base.equalsIgnoreCase("config.bak.json") ||
+      base.equalsIgnoreCase("config.tmp.json")) {
+    return true;
+  }
+  return false;
+}
+
+int scanWavNamesIntoList(const char *dirPath) {
+  fileCount = 0;
+  File dir = SD.open(dirPath);
+  if (!dir || !dir.isDirectory()) {
+    if (dir) {
+      dir.close();
+    }
+    return 0;
+  }
+  while (fileCount < MAX_FILES_IN_DIR) {
+    feedWatchdog();
+    File entry = dir.openNextFile();
+    if (!entry) {
+      break;
+    }
+    String name = String(entry.name());
+    bool isDir = entry.isDirectory();
+    entry.close();
+    if (isDir || isIgnoredDirEntry(name)) {
+      continue;
+    }
+    if (endsWithIgnoreCase(name, ".wav")) {
+      String base = baseNameOnly(name);
+      if (!name.startsWith("/")) {
+        snprintf(fileList[fileCount], MAX_PATH, "%s/%s", dirPath, base.c_str());
+      } else {
+        strncpy(fileList[fileCount], name.c_str(), MAX_PATH - 1);
+        fileList[fileCount][MAX_PATH - 1] = 0;
+      }
+      fileCount++;
+    }
+  }
+  dir.close();
+  return fileCount;
+}
+
+bool writeDirListFile(const char *dirPath) {
+  // Не трогаем глобальный fileList — может идти play.
+  String listPath = dirListPath(dirPath);
+  if (SD.exists(listPath.c_str())) {
+    SD.remove(listPath.c_str());
+  }
+  File out = SD.open(listPath.c_str(), FILE_WRITE);
+  if (!out) {
+    return false;
+  }
+  File dir = SD.open(dirPath);
+  if (!dir || !dir.isDirectory()) {
+    if (dir) {
+      dir.close();
+    }
+    out.close();
+    return false;
+  }
+  int n = 0;
+  while (n < MAX_FILES_IN_DIR) {
+    feedWatchdog();
+    File entry = dir.openNextFile();
+    if (!entry) {
+      break;
+    }
+    String name = String(entry.name());
+    bool isDir = entry.isDirectory();
+    entry.close();
+    if (isDir || isIgnoredDirEntry(name)) {
+      continue;
+    }
+    if (endsWithIgnoreCase(name, ".wav")) {
+      out.println(baseNameOnly(name));
+      n++;
+    }
+  }
+  dir.close();
+  out.close();
+  return true;
+}
+
+bool readDirListFile(const char *dirPath) {
+  fileCount = 0;
+  String listPath = dirListPath(dirPath);
+  File f = SD.open(listPath.c_str(), FILE_READ);
+  if (!f) {
+    return false;
+  }
+  while (f.available() && fileCount < MAX_FILES_IN_DIR) {
+    String line = f.readStringUntil('\n');
+    line.trim();
+    if (line.length() == 0) {
+      continue;
+    }
+    if (line.endsWith("\r")) {
+      line.remove(line.length() - 1);
+    }
+    String base = baseNameOnly(line);
+    if (!endsWithIgnoreCase(base, ".wav") || isIgnoredDirEntry(base)) {
+      continue;
+    }
+    if (strcmp(dirPath, "/") == 0) {
+      snprintf(fileList[fileCount], MAX_PATH, "/%s", base.c_str());
+    } else {
+      snprintf(fileList[fileCount], MAX_PATH, "%s/%s", dirPath, base.c_str());
+    }
+    fileList[fileCount][MAX_PATH - 1] = 0;
+    fileCount++;
+    if ((fileCount & 7) == 0) {
+      feedWatchdog();
+    }
+  }
+  f.close();
+  return fileCount > 0;
+}
+
+void collectWavFiles(const char *dirPath) {
+  fileCount = 0;
+  if (!sdOk && !reinitSd()) {
+    return;
+  }
+  if (readDirListFile(dirPath)) {
+    return;
+  }
+  if (scanWavNamesIntoList(dirPath) > 0) {
+    // list из памяти: writeDirListFile снова сканирует папку, fileList не портит.
+    writeDirListFile(dirPath);
+    return;
+  }
+  if (reinitSd()) {
+    if (readDirListFile(dirPath)) {
+      return;
+    }
+    if (scanWavNamesIntoList(dirPath) > 0) {
+      writeDirListFile(dirPath);
+    }
+  }
+}
+
+void refreshAllDirLists() {
+  if (!sdOk && !reinitSd()) {
+    return;
+  }
+  pendingListCount = 0;
+  pendingListIndex = 0;
+  pendingListsActive = false;
+  File root = SD.open("/");
+  if (!root || !root.isDirectory()) {
+    if (root) {
+      root.close();
+    }
+    if (!reinitSd()) {
+      return;
+    }
+    root = SD.open("/");
+    if (!root || !root.isDirectory()) {
+      if (root) {
+        root.close();
+      }
+      return;
+    }
+  }
+  while (pendingListCount < 16) {
+    feedWatchdog();
+    File entry = root.openNextFile();
+    if (!entry) {
+      break;
+    }
+    String name = String(entry.name());
+    bool isDir = entry.isDirectory();
+    entry.close();
+    if (!isDir || isIgnoredDirEntry(name)) {
+      continue;
+    }
+    String base = baseNameOnly(name);
+    if (name.startsWith("/")) {
+      strncpy(pendingListDirs[pendingListCount], name.c_str(), MAX_PATH - 1);
+    } else {
+      snprintf(pendingListDirs[pendingListCount], MAX_PATH, "/%s", base.c_str());
+    }
+    pendingListDirs[pendingListCount][MAX_PATH - 1] = 0;
+    pendingListCount++;
+  }
+  root.close();
+  pendingListsActive = (pendingListCount > 0);
+  if (pendingListsActive) {
+    logMsg("Ochered list.txt po papkam");
+  }
+}
+
+void pumpDirListRefresh() {
+  if (!pendingListsActive) {
+    return;
+  }
+  if (pendingListIndex >= pendingListCount) {
+    pendingListsActive = false;
+    logMsg("list.txt gotovo");
+    return;
+  }
+  writeDirListFile(pendingListDirs[pendingListIndex]);
+  pendingListIndex++;
+  feedWatchdog();
+}
+
+void refreshParentListForPath(const String &path) {
+  String parent = parentDirOf(path);
+  if (parent.length() == 0) {
+    parent = "/";
+  }
+  writeDirListFile(parent.c_str());
+}
+
 void closeWav() {
   if (wavFile) {
     wavFile.close();
@@ -592,35 +955,15 @@ bool skipWavHeader(File &f, int *dataSize) {
   return false;
 }
 
-void collectWavFiles(const char *dirPath) {
-  fileCount = 0;
-  File dir = SD.open(dirPath);
-  if (!dir || !dir.isDirectory()) {
-    logMsg("Papka zvukov ne naydena");
-    return;
-  }
-  while (fileCount < MAX_FILES_IN_DIR) {
-    File entry = dir.openNextFile();
-    if (!entry) {
-      break;
-    }
-    String name = String(entry.name());
-    entry.close();
-    if (endsWithIgnoreCase(name, ".wav")) {
-      if (!name.startsWith("/")) {
-        snprintf(fileList[fileCount], MAX_PATH, "%s/%s", dirPath, name.c_str());
-      } else {
-        strncpy(fileList[fileCount], name.c_str(), MAX_PATH - 1);
-      }
-      fileCount++;
-    }
-  }
-  dir.close();
-}
-
 bool openWavPath(const char *path) {
   closeWav();
+  feedWatchdog();
   wavFile = SD.open(path, FILE_READ);
+  if (!wavFile) {
+    if (reinitSd()) {
+      wavFile = SD.open(path, FILE_READ);
+    }
+  }
   if (!wavFile) {
     Serial.print("Ne otkryl wav: ");
     Serial.println(path);
@@ -631,8 +974,10 @@ bool openWavPath(const char *path) {
     closeWav();
     return false;
   }
+  feedWatchdog();
   strncpy(currentFile, path, sizeof(currentFile) - 1);
   bufALen = wavFile.read(audioBufA, BUFFER_BYTES);
+  feedWatchdog();
   if (bufALen > wavDataBytesLeft) {
     bufALen = wavDataBytesLeft;
   }
@@ -640,6 +985,7 @@ bool openWavPath(const char *path) {
   bufBLen = 0;
   if (wavDataBytesLeft > 0) {
     bufBLen = wavFile.read(audioBufB, BUFFER_BYTES);
+    feedWatchdog();
     if (bufBLen > wavDataBytesLeft) {
       bufBLen = wavDataBytesLeft;
     }
@@ -736,8 +1082,8 @@ void feedI2s() {
       break;
     }
     playPos += 2;
-    if ((playPos & 0x7F) == 0) {
-      ESP.wdtFeed();
+    if ((playPos & 0x3FF) == 0) {
+      feedWatchdog();
     }
   }
 
@@ -747,6 +1093,7 @@ void feedI2s() {
       bufALen = 0;
       if (wavDataBytesLeft > 0 && wavFile) {
         bufALen = wavFile.read(audioBufA, BUFFER_BYTES);
+        feedWatchdog();
         if (bufALen > wavDataBytesLeft) {
           bufALen = wavDataBytesLeft;
         }
@@ -756,6 +1103,7 @@ void feedI2s() {
       bufBLen = 0;
       if (wavDataBytesLeft > 0 && wavFile) {
         bufBLen = wavFile.read(audioBufB, BUFFER_BYTES);
+        feedWatchdog();
         if (bufBLen > wavDataBytesLeft) {
           bufBLen = wavDataBytesLeft;
         }
@@ -888,9 +1236,16 @@ pre { background:#f4f4f4; padding:8px; overflow:auto; }
   <label>Игнор PIR после ребута, сек
     <input id="mboot" type="number" min="0" max="120">
   </label>
+  <label>Watchdog, сек (8–60). На ESP8266 ядро может игнорить точное значение; кормим реже + yield на SD
+    <input id="wdt" type="number" min="8" max="60" value="30">
+  </label>
   <h3>Расписание (JSON)</h3>
   <textarea id="schedule" rows="14" style="width:100%"></textarea>
-  <p><button onclick="saveCfg()">Сохранить config.json</button></p>
+  <p>
+    <button id="saveBtn" onclick="saveCfg()">Сохранить config.json</button>
+    <button id="restoreBtn" onclick="restoreCfg()">Восстановить прежний config</button>
+  </p>
+  <p id="cfgMsg" style="min-height:1.2em;color:#333"></p>
 </div>
 <div class="card">
   <h2>Файлы</h2>
@@ -925,6 +1280,7 @@ async function loadCfg(){
   document.getElementById('midle').value = c.motion.idle_repeat_seconds??15;
   document.getElementById('mstab').value = c.motion.stable_ms??400;
   document.getElementById('mboot').value = c.motion.boot_ignore_seconds??10;
+  document.getElementById('wdt').value = (c.watchdog_seconds != null) ? c.watchdog_seconds : ((c.server && c.server.watchdog_seconds) || 30);
   document.getElementById('vol').value = (c.playback.schedule[0]||{}).volume||100;
   document.getElementById('schedule').value = JSON.stringify(c.playback.schedule, null, 2);
 }
@@ -956,27 +1312,73 @@ async function setVolume(){
   loadStatus();
 }
 async function saveCfg(){
-  const body = {
-    wifi:{ssid:document.getElementById('ssid').value, password:document.getElementById('pass').value},
-    ntp:{
-      server:document.getElementById('ntp').value,
-      timezone_offset:Number(document.getElementById('tz').value),
-      update_interval:Number(document.getElementById('ntpint').value)
-    },
-    server:{port:80},
-    motion:{
-      timeout_seconds:Number(document.getElementById('mtime').value),
-      cooldown_seconds:Number(document.getElementById('mcool').value),
-      repeat_seconds:Number(document.getElementById('mrep').value),
-      idle_repeat_seconds:Number(document.getElementById('midle').value),
-      stable_ms:Number(document.getElementById('mstab').value),
-      boot_ignore_seconds:Number(document.getElementById('mboot').value)
-    },
-    logging:{level:'INFO'},
-    playback:{type:'files', schedule: JSON.parse(document.getElementById('schedule').value)}
-  };
-  const r = await fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  alert(await r.text());
+  const btn = document.getElementById('saveBtn');
+  const msg = document.getElementById('cfgMsg');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = 'Сохраняю…';
+  msg.textContent = 'Пишу config.json на SD (бэкап → config.bak.json)…';
+  let body;
+  try {
+    body = {
+      wifi:{ssid:document.getElementById('ssid').value, password:document.getElementById('pass').value},
+      ntp:{
+        server:document.getElementById('ntp').value,
+        timezone_offset:Number(document.getElementById('tz').value),
+        update_interval:Number(document.getElementById('ntpint').value)
+      },
+      server:{port:80, watchdog_seconds:Number(document.getElementById('wdt').value)},
+      watchdog_seconds:Number(document.getElementById('wdt').value),
+      motion:{
+        timeout_seconds:Number(document.getElementById('mtime').value),
+        cooldown_seconds:Number(document.getElementById('mcool').value),
+        repeat_seconds:Number(document.getElementById('mrep').value),
+        idle_repeat_seconds:Number(document.getElementById('midle').value),
+        stable_ms:Number(document.getElementById('mstab').value),
+        boot_ignore_seconds:Number(document.getElementById('mboot').value)
+      },
+      logging:{level:'INFO'},
+      playback:{type:'files', schedule: JSON.parse(document.getElementById('schedule').value)}
+    };
+  } catch (e) {
+    msg.textContent = 'Ошибка JSON расписания: ' + e.message;
+    btn.disabled = false;
+    btn.textContent = old;
+    return;
+  }
+  try {
+    const r = await fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    const t = await r.text();
+    msg.textContent = t;
+    if (!r.ok) throw new Error(t);
+  } catch (e) {
+    msg.textContent = 'Ошибка: ' + e.message;
+  }
+  btn.disabled = false;
+  btn.textContent = old;
+  loadStatus();
+}
+async function restoreCfg(){
+  const btn = document.getElementById('restoreBtn');
+  const msg = document.getElementById('cfgMsg');
+  if (btn.disabled) return;
+  if (!confirm('Восстановить /config.bak.json поверх текущего config.json?')) return;
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = 'Восстанавливаю…';
+  msg.textContent = 'Читаю config.bak.json…';
+  try {
+    const r = await fetch('/api/config/restore', {method:'POST'});
+    const t = await r.text();
+    msg.textContent = t;
+    if (!r.ok) throw new Error(t);
+    await loadCfg();
+  } catch (e) {
+    msg.textContent = 'Ошибка: ' + e.message;
+  }
+  btn.disabled = false;
+  btn.textContent = old;
   loadStatus();
 }
 async function mkdir(){
@@ -1022,7 +1424,8 @@ code, pre { background:#f6f6f6; padding:2px 6px; }
 <div class="ep"><b>POST /api/stop</b><br>Остановить музыку.</div>
 <div class="ep"><b>POST /api/volume?value=0..100</b><br>Громкость прямо сейчас. В config не пишет.</div>
 <div class="ep"><b>GET /api/config</b><br>Текущий config.json, в т.ч. motion.timeout_seconds / cooldown_seconds / repeat_seconds / idle_repeat_seconds / stable_ms / boot_ignore_seconds.</div>
-<div class="ep"><b>POST /api/config</b><br>Тело: JSON конфигурации. Пишет на SD в /config.json и применяет сразу.</div>
+<div class="ep"><b>POST /api/config</b><br>Тело: JSON. Перед записью копирует старый в /config.bak.json, пишет через tmp.</div>
+<div class="ep"><b>POST /api/config/restore</b><br>Восстановить /config.bak.json → /config.json и применить.</div>
 <div class="ep"><b>POST /api/reload</b><br>Перечитать /config.json с карты. WiFi не переподключает.</div>
 <div class="ep"><b>POST /api/reboot</b><br>Отвечает ok и зависает: hardware watchdog сбрасывает плату.</div>
 <div class="ep"><b>GET /api/files?path=/</b><br>Содержимое одной папки: path + entries (type file/dir, size у файлов). Не рекурсивно.</div>
@@ -1039,7 +1442,8 @@ code, pre { background:#f6f6f6; padding:2px 6px; }
     "/api/play": {"post": {"summary": "play"}},
     "/api/stop": {"post": {"summary": "stop"}},
     "/api/volume": {"post": {"summary": "volume"}},
-    "/api/config": {"get": {"summary": "get config"}, "post": {"summary": "save config"}},
+    "/api/config": {"get": {"summary": "get config"}, "post": {"summary": "save config + bak"}},
+    "/api/config/restore": {"post": {"summary": "restore config.bak.json"}},
     "/api/reload": {"post": {"summary": "reread config.json"}},
     "/api/reboot": {"post": {"summary": "watchdog reset"}},
     "/api/files": {"get": {"summary": "list one directory"}},
@@ -1209,6 +1613,10 @@ void handleStatus() {
   doc["pir_ok"] = pirConfirmedCount;
   doc["last_high_ms"] = lastRawHighDurationMs;
   doc["high_samples"] = motionHighSamples;
+  doc["config_bak"] = sdOk && SD.exists(CONFIG_BAK_PATH);
+  doc["watchdog_seconds"] = cfg.watchdogSeconds;
+  doc["reset_reason"] = ESP.getResetReason();
+  doc["free_heap"] = ESP.getFreeHeap();
   String out;
   serializeJson(doc, out);
   server.send(200, "application/json", out);
@@ -1254,15 +1662,35 @@ void handlePostConfig() {
     sendText(400, "pustoe telo");
     return;
   }
-  if (!parseConfigJson(server.arg("plain"))) {
+  String body = server.arg("plain");
+  if (body.length() < 8) {
+    sendText(400, "slishkom korotkiy json");
+    return;
+  }
+  Config oldCfg = cfg;
+  if (!parseConfigJson(body)) {
+    cfg = oldCfg;
     sendText(400, "ne smog razobrat json");
     return;
   }
   if (!saveConfigToSd()) {
+    cfg = oldCfg;
     sendText(500, "ne smog zapisat na SD");
     return;
   }
-  sendText(200, "sohraneno. wifi pomenyaetsya posle perezagruzki");
+  applyWatchdogFromConfig();
+  sendText(200, "sohraneno. bak=/config.bak.json. wifi pomenyaetsya posle perezagruzki");
+}
+
+void handleRestoreConfig() {
+  if (!restoreConfigFromBak()) {
+    sendText(404, "net /config.bak.json ili ne smog vosstanovit");
+    return;
+  }
+  configOk = true;
+  applyWatchdogFromConfig();
+  applyPeriod(findPeriodIndex(currentMinutesOfDay()), false);
+  sendText(200, "vosstanovlen iz /config.bak.json");
 }
 
 void handleReload() {
@@ -1298,7 +1726,16 @@ void handleFiles() {
     sendText(400, err);
     return;
   }
+  if (!sdOk && !reinitSd()) {
+    sendText(500, "SD karta ne vidna");
+    return;
+  }
   File dir = SD.open(path);
+  if (!dir) {
+    if (reinitSd()) {
+      dir = SD.open(path);
+    }
+  }
   if (!dir) {
     sendText(404, "net takoy papki");
     return;
@@ -1311,7 +1748,9 @@ void handleFiles() {
   DynamicJsonDocument doc(4096);
   doc["path"] = path;
   JsonArray arr = doc.createNestedArray("entries");
+  int entryCount = 0;
   while (true) {
+    feedWatchdog();
     File entry = dir.openNextFile();
     if (!entry) {
       break;
@@ -1325,8 +1764,38 @@ void handleFiles() {
       o["size"] = entry.size();
     }
     entry.close();
+    entryCount++;
   }
   dir.close();
+  if (entryCount == 0 && path == "/") {
+    if (reinitSd()) {
+      dir = SD.open("/");
+      if (dir && dir.isDirectory()) {
+        doc.clear();
+        doc["path"] = path;
+        arr = doc.createNestedArray("entries");
+        while (true) {
+          feedWatchdog();
+          File entry = dir.openNextFile();
+          if (!entry) {
+            break;
+          }
+          JsonObject o = arr.createNestedObject();
+          o["name"] = String(entry.name());
+          if (entry.isDirectory()) {
+            o["type"] = "dir";
+          } else {
+            o["type"] = "file";
+            o["size"] = entry.size();
+          }
+          entry.close();
+        }
+        dir.close();
+      } else if (dir) {
+        dir.close();
+      }
+    }
+  }
   String out;
   serializeJson(doc, out);
   server.send(200, "application/json", out);
@@ -1360,12 +1829,14 @@ void handleMkdir() {
     }
     if (isDir) {
       sendText(200, "papka uzhe est " + path);
+      writeDirListFile(path.c_str());
       return;
     }
     sendText(400, "put zanyat faylom");
     return;
   }
   if (SD.mkdir(path.c_str())) {
+    writeDirListFile(path.c_str());
     sendText(200, "papka sozdana " + path);
   } else {
     sendText(500, "ne smog sozdat papku");
@@ -1375,8 +1846,10 @@ void handleMkdir() {
 void handleDelete() {
   String path = server.arg("path");
   String err;
-  if (!pathCheck(path, false, err) || path == CONFIG_PATH) {
-    sendText(400, path == CONFIG_PATH ? String("nelzya udalit /config.json") : err);
+  if (!pathCheck(path, false, err) || path == CONFIG_PATH || path == CONFIG_BAK_PATH || path == CONFIG_TMP_PATH) {
+    sendText(400, (path == CONFIG_PATH || path == CONFIG_BAK_PATH || path == CONFIG_TMP_PATH)
+                       ? String("nelzya udalit config fayly")
+                       : err);
     return;
   }
   if (!SD.exists(path.c_str())) {
@@ -1387,6 +1860,9 @@ void handleDelete() {
     stopPlayback();
   }
   if (SD.remove(path.c_str())) {
+    if (endsWithIgnoreCase(path, ".wav")) {
+      refreshParentListForPath(path);
+    }
     sendText(200, "udalen");
   } else {
     sendText(500, "ne udalil");
@@ -1477,6 +1953,7 @@ void handleUpload() {
 
 void handleUploadDone() {
   if (uploadOk) {
+    refreshParentListForPath(uploadTargetPath);
     sendText(200, "zagruzhen " + uploadTargetPath + " (" + String(uploadBytes) + " byte)");
   } else {
     sendText(400, uploadError);
@@ -1496,6 +1973,7 @@ void setupServer() {
   server.on("/api/volume", HTTP_POST, handleVolume);
   server.on("/api/config", HTTP_GET, handleGetConfig);
   server.on("/api/config", HTTP_POST, handlePostConfig);
+  server.on("/api/config/restore", HTTP_POST, handleRestoreConfig);
   server.on("/api/reload", HTTP_POST, handleReload);
   server.on("/api/reboot", HTTP_POST, handleReboot);
   server.on("/api/files", HTTP_GET, handleFiles);
@@ -1512,11 +1990,16 @@ void setupServer() {
 void setup() {
   Serial.begin(115200);
   delay(200);
+  setDefaultConfig();
+  // Не ужесточаем WDT до WiFi: иначе SD.begin/hang = вечный reboot без сети.
   ESP.wdtEnable(8000);
   logMsg("lolin-wc-sounds start");
+  Serial.print("Reset: ");
+  Serial.println(ESP.getResetReason());
   pinMode(PIN_PIR, INPUT);
 
   SPI.begin();
+  delay(20);
   sdOk = SD.begin(PIN_SD_CS);
   if (!sdOk) {
     logMsg("SD karta ne vidna. Prover pin CS=D0 i format FAT32.");
@@ -1536,10 +2019,15 @@ void setup() {
     syncNtp();
   }
   setupServer();
+  applyWatchdogFromConfig();
+  if (sdOk) {
+    refreshAllDirLists();
+  }
 }
 
 void loop() {
   ESP.wdtFeed();
+  pumpDirListRefresh();
   server.handleClient();
 
   unsigned long now = millis();

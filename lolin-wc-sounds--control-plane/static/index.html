@@ -94,10 +94,18 @@
               <label>Игнор PIR после ребута, сек
                 <input id="mboot" type="number" min="0" max="120">
               </label>
+              <label>Watchdog, сек
+                <input id="mwdt" type="number" min="8" max="60">
+                <span class="hint">8–60. На ESP8266 точное значение ядро может игнорить</span>
+              </label>
             </div>
             <h4>Расписание</h4>
             <div id="schedule" class="schedule"></div>
-            <p><button type="button" id="save-cfg">Сохранить config.json на модуль</button></p>
+            <p class="cfg-actions">
+              <button type="button" id="save-cfg">Сохранить config.json на модуль</button>
+              <button type="button" id="restore-cfg" class="ghost">Восстановить прежний</button>
+            </p>
+            <p class="flash" id="cfg-flash" hidden></p>
           </article>
 
           <article class="panel">
