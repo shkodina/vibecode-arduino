@@ -1,0 +1,37 @@
+services:
+  # База: ubuntu + ffmpeg + pip. Собирается отдельно (profile build).
+  lolin-wc-sounds-cp-base:
+    image: lolin-wc-sounds-cp-base:latest
+    build:
+      context: ..
+      dockerfile: Dockerfile.base
+      network: host
+    profiles:
+      - build
+
+  lolin-wc-sounds-cp:
+    image: lolin-wc-sounds-cp:latest
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      network: host
+    container_name: lolin-wc-sounds-cp
+    hostname: nas2
+    restart: unless-stopped
+    # host — чтобы скан 192.168.88.0/24 и доступ к ESP8266 работали как с хоста
+    network_mode: host
+    volumes:
+      - ../config.yaml:/app/config.yaml
+
+x-cmd:
+  lolin-wc-sounds-cp:
+    cmd_up:   docker compose -p lolin-wc-sounds-cp -f $HOME/work-dir/vibecode-arduino/lolin-wc-sounds--control-plane/docker-compose/compose.yaml up -d
+    cmd_down: docker compose -p lolin-wc-sounds-cp down
+    url: http://wc.nas.home/
+    note: |
+      Сборка базы (ffmpeg + pip) и приложения:
+        ./docker-run.sh
+      После правок только Python/static достаточно снова ./docker-run.sh
+      (слой Dockerfile.base кэшируется). Останов: ./docker-stop.sh
+      Слушает listen.host/port из config.yaml (0.0.0.0:8338).
+      LAN: http://wc.nas.home -> nginx -> 192.168.88.25:8338
