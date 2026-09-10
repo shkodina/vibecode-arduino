@@ -149,6 +149,7 @@ String jsonStatusa() {
   doc["sensorMaxKg"] = config.sensorMaxKg;
   doc["wsClients"] = webSocket.connectedClients();
   doc["hx711Ready"] = vesy.is_ready();
+  doc["freeHeap"] = ESP.getFreeHeap();
 
   String otvet;
   serializeJson(doc, otvet);
@@ -205,7 +206,11 @@ void obrabotatVesy() {
     return;
   }
 
-  tekushiyVesKg = vesy.get_units(HX711_SAMPLES);
+  float vesKg = 0.0f;
+  if (!chitatVesBezZavisaniya(vesKg)) {
+    return;
+  }
+  tekushiyVesKg = vesKg;
   if (tekushiyVesKg < 0.0f && tekushiyVesKg > -0.2f) {
     tekushiyVesKg = 0.0f;
   }
@@ -290,13 +295,40 @@ String imyaWifiRezhima() {
 }
 
 bool zhdatGotovnostHX711() {
-  unsigned long start = millis();
-  while (!vesy.is_ready() && millis() - start < HX711_READY_TIMEOUT_MS) {
-    server.handleClient();
-    webSocket.loop();
+  // Важно: не вызывать server.handleClient() отсюда.
+  // Эта функция может вызываться из HTTP-обработчика, а вложенный
+  // handleClient ломает ESP8266WebServer и выглядит как зависание.
+  return vesy.wait_ready_timeout(HX711_READY_TIMEOUT_MS, 1);
+}
+
+bool chitatVesBezZavisaniya(float& vesKg) {
+  // get_units()/read() внутри библиотеки HX711 делают wait_ready() без
+  // таймаута. Если DOUT никогда не станет LOW, loop навсегда застрянет
+  // и веб перестанет отвечать. Поэтому ждём только с таймаутом и берём
+  // один отсчёт, когда датчик уже готов.
+  if (!vesy.wait_ready_timeout(HX711_READY_TIMEOUT_MS, 1)) {
+    return false;
+  }
+  vesKg = vesy.get_units(1);
+  return true;
+}
+
+bool sredniySyroyHX711(byte times, long& out) {
+  if (times == 0) {
+    return false;
+  }
+  long sum = 0;
+  for (byte i = 0; i < times; i++) {
+    if (!vesy.wait_ready_timeout(HX711_READY_TIMEOUT_MS, 1)) {
+      return false;
+    }
+    // После успешного wait_ready_timeout DOUT уже LOW, внутренний
+    // wait_ready() в read() выйдет сразу.
+    sum += vesy.read();
     yield();
   }
-  return vesy.is_ready();
+  out = sum / times;
+  return true;
 }
 
 bool otkalibrovatPoVesu(float etalonKg, String& oshibka) {
@@ -309,7 +341,11 @@ bool otkalibrovatPoVesu(float etalonKg, String& oshibka) {
     return false;
   }
 
-  long syroe = vesy.read_average(max(5, HX711_SAMPLES * 4));
+  long syroe = 0;
+  if (!sredniySyroyHX711(max(5, HX711_SAMPLES * 4), syroe)) {
+    oshibka = "hx711 read timeout";
+    return false;
+  }
   float novyyScale = (syroe - config.calibrationOffset) / etalonKg;
   if (novyyScale == 0.0f || isnan(novyyScale)) {
     oshibka = "calculated calibrationScale is invalid";
@@ -494,7 +530,7 @@ async function rebootWdt(event) {
   pressButton(event && event.target);
   try {
     await checkedFetch('/api/reboot', { method: 'POST' });
-    showActionStatus('Watchdog-перезагрузка запрошена.', false);
+    showActionStatus('Перезагрузка запрошена: контроллер перезапустится через watchdogSec.', false);
   } catch (err) {
     showActionStatus('Ошибка запроса перезагрузки: ' + err.message, true);
   }
@@ -594,7 +630,12 @@ void sdelatTare() {
     return;
   }
 
-  vesy.tare(max(5, HX711_SAMPLES * 4));
+  long syroe = 0;
+  if (!sredniySyroyHX711(max(5, HX711_SAMPLES * 4), syroe)) {
+    otvetJson(503, "{\"error\":\"hx711 read timeout\"}");
+    return;
+  }
+  vesy.set_offset(syroe);
   config.calibrationOffset = vesy.get_offset();
   sohranitKonfiguraciyu();
   otvetJson(200, jsonKonfiguracii(true));
@@ -664,6 +705,9 @@ void obrabotatWs(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
 void otpravitWsStatus() {
   unsigned long seychas = millis();
   if (seychas - poslednyayaWsOtpravkaMs < WS_PUSH_MS) {
+    return;
+  }
+  if (webSocket.connectedClients() == 0) {
     return;
   }
   poslednyayaWsOtpravkaMs = seychas;
@@ -743,9 +787,10 @@ void obrabotatPerezagruzkuWdt() {
   }
   unsigned long proshloSec = (millis() - startPerezagruzkiWdtMs) / 1000UL;
   if (proshloSec >= config.watchdogSec) {
-    // delay()/yield() кормят watchdog на ESP8266, поэтому намеренно зависаем.
-    while (true) {
-    }
+    // Раньше тут был пустой while(true) ради аппаратного WDT.
+    // На практике это выглядело как "контроллер завис".
+    // Делаем штатный перезапуск после таймаута.
+    ESP.restart();
   }
 }
 

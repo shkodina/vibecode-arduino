@@ -58,7 +58,7 @@ def test_firmware_shows_visible_feedback_after_web_actions():
         "Tare выполнен",
         "Калибровка выполнена",
         "Сброс выполнен",
-        "Watchdog-перезагрузка запрошена",
+        "Перезагрузка запрошена",
     ]
 
     for token in required_tokens:
@@ -113,13 +113,42 @@ def test_firmware_waits_for_hx711_before_tare_and_calibration():
     required_tokens = [
         "HX711_READY_TIMEOUT_MS",
         "zhdatGotovnostHX711(",
-        "while (!vesy.is_ready()",
-        "yield();",
+        "wait_ready_timeout(",
         "if (!zhdatGotovnostHX711())",
     ]
 
     for token in required_tokens:
         assert token in firmware
+
+
+def test_firmware_avoids_infinite_hx711_wait_and_http_reentrancy():
+    firmware = read("silomer-stanovaya.ino")
+
+    required_tokens = [
+        "wait_ready_timeout(",
+        "freeHeap",
+        "connectedClients()",
+        "ESP.restart()",
+    ]
+
+    for token in required_tokens:
+        assert token in firmware
+
+    # Inside zhdatGotovnostHX711 there must be no nested HTTP handling.
+    wait_fn = firmware.split("bool zhdatGotovnostHX711()")[1].split("bool otkalibrovatPoVesu")[0]
+    assert "server.handleClient();" not in wait_fn
+    assert "wait_ready_timeout(" in wait_fn
+
+
+def test_readme_documents_hang_causes():
+    readme = read("readme.md").lower()
+    for phrase in [
+        "почему может зависать",
+        "wait_ready",
+        "не вызывает `handleclient`",
+        "freeheap",
+    ]:
+        assert phrase in readme
 
 
 def test_build_script_uses_env_and_does_not_store_wifi_in_sources():
