@@ -31,6 +31,11 @@ const unsigned long ZAVOD_PERIOD_SEC = 10; // сек, длина периода 
 const unsigned long ZAVOD_WDT_SEC = 30;    // сек, софтовый вачдог
 const char* ZAVOD_DEVICE_NAME = "silomer-stanovaya";
 
+// Идентификатор модели для веб-админки. Не путать с именем устройства:
+// deviceName может быть "силомер на 1 этаже", а modelId остаётся типом
+// прошивки/железа. На веб-странице не показывается и не меняется.
+const char* MODEL_ID = "silomer-stanovaya";
+
 // STA ssid/пароль по умолчанию — из WIFI_SSID / WIFI_PASS на этапе сборки.
 // Если в EEPROM уже есть сохранённые — используются они.
 

@@ -112,7 +112,8 @@ void zagruzitKonfiguraciyu() {
 }
 
 String jsonKonfiguracii(bool skrytParol) {
-  StaticJsonDocument<512> doc;
+  StaticJsonDocument<640> doc;
+  doc["modelId"] = MODEL_ID;
   doc["deviceName"] = config.deviceName;
   doc["wifiSsid"] = config.wifiSsid;
   doc["wifiPass"] = skrytParol ? "********" : config.wifiPass;
@@ -129,8 +130,9 @@ String jsonKonfiguracii(bool skrytParol) {
 }
 
 String jsonStatusa() {
-  StaticJsonDocument<768> doc;
+  StaticJsonDocument<896> doc;
   doc["uptimeSec"] = millis() / 1000;
+  doc["modelId"] = MODEL_ID;
   doc["deviceName"] = config.deviceName;
   doc["wifiMode"] = WiFi.getMode() == WIFI_AP ? "StandAlone" : "UseExistedWiFi";
   doc["ip"] = WiFi.getMode() == WIFI_AP ? WiFi.softAPIP().toString() : WiFi.localIP().toString();

@@ -93,6 +93,20 @@ def test_firmware_exposes_named_wifi_modes_and_calibration_config():
         assert token in config
 
 
+def test_firmware_exposes_read_only_model_id_for_admin_scan():
+    firmware = read("silomer-stanovaya.ino")
+    config = read("config.h")
+    readme = read("readme.md").lower()
+
+    assert 'MODEL_ID = "silomer-stanovaya"' in config
+    assert 'doc["modelId"] = MODEL_ID' in firmware
+    assert 'id="modelId"' not in firmware
+    cfg_submit = firmware.split("qs('cfg').addEventListener")[1].split("qs('cal').addEventListener")[0]
+    assert "modelId:" not in cfg_submit
+    assert "modelid" in readme
+    assert "не путать с именем устройства" in readme or "не путать с `devicename`" in readme
+
+
 def test_firmware_waits_for_hx711_before_tare_and_calibration():
     firmware = read("silomer-stanovaya.ino")
 
