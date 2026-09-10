@@ -4,7 +4,7 @@
 // Версия прошивки: статус "00.00.001", BLE-имя "piper-light-alarm-0000001".
 #define FIRMWARE_VERSION_MAJOR 0
 #define FIRMWARE_VERSION_MINOR 0
-#define FIRMWARE_VERSION_PATCH 1
+#define FIRMWARE_VERSION_PATCH 2
 
 #define BLUETOOTH_PIN "8888"
 #define BLUETOOTH_NAME_PREFIX "piper-light-alarm-"
@@ -12,11 +12,15 @@
 #define ALARM_COUNT 10
 #define HTTP_PORT 80
 
-// GPIO4 на ESP32-C3 Super Mini обычно свободен и удобен для PWM.
+// На шёлке платы «4» = GPIO4. SIG модуль IRF520 сюда.
 #define LED_PWM_PIN 4
 #define LED_PWM_CHANNEL 0
 #define LED_PWM_FREQUENCY 5000
 #define LED_PWM_RESOLUTION_BITS 8
+
+// Встроенный синий LED Super Mini (active LOW) — зеркало для проверки, что тест идёт.
+#define ONBOARD_LED_PIN 8
+#define ONBOARD_LED_ACTIVE_LOW 1
 
 #define NTP_SERVER "pool.ntp.org"
 #define NTP_SYNC_INTERVAL_SECONDS 3600

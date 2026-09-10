@@ -53,6 +53,16 @@ h1 {
   margin-top: 12px;
 }
 .banner.show { display: block; }
+.banner.show.ok {
+  background: #123a22;
+  border-color: #2f8f5b;
+  color: #d4ffe4;
+}
+.banner.show.info {
+  background: #2a1c0c;
+  border-color: var(--orange-dim);
+  color: #ffe0c2;
+}
 .card {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -149,16 +159,35 @@ h2 { margin: 18px 0 8px; font-size: 1.2rem; }
 <script>
 var DAYS = ["Пн","Вт","Ср","Чт","Пт","Сб","Вс"];
 var settings = null;
+var bannerHoldUntil = 0;
+var busy = false;
 
-function showBanner(text) {
+function showBanner(text, kind) {
   var el = document.getElementById("banner");
   if (!text) {
     el.className = "banner";
     el.textContent = "";
     return;
   }
-  el.className = "banner show";
+  kind = kind || "error";
+  el.className = "banner show " + (kind === "ok" ? "ok" : (kind === "info" ? "info" : ""));
   el.textContent = text;
+  if (kind === "ok" || kind === "info") {
+    bannerHoldUntil = Date.now() + 4000;
+  } else {
+    bannerHoldUntil = Date.now() + 8000;
+  }
+}
+
+function setBusy(on, label) {
+  busy = !!on;
+  var buttons = document.querySelectorAll("button");
+  for (var i = 0; i < buttons.length; i++) {
+    buttons[i].disabled = busy;
+  }
+  if (busy && label) {
+    showBanner(label, "info");
+  }
 }
 
 function modeFields(prefix, mode) {
@@ -261,7 +290,8 @@ function renderTimer() {
 
 function renderTest() {
   document.getElementById("testCard").innerHTML =
-    modeFields("x", {type:"pulse", startBrightness:5, finishBrightness:100, rampSeconds:5, darkSeconds:5, totalSeconds:60}) +
+    modeFields("x", {type:"pulse", startBrightness:10, finishBrightness:100, rampSeconds:3, darkSeconds:2, totalSeconds:30}) +
+    '<div class="muted" style="margin-top:8px">PWM на GPIO'+(settings && settings.pwmPin ? settings.pwmPin : 4)+' (шёлк «4»). При тесте должен мигать и синий LED на плате.</div>' +
     '<div class="row" style="margin-top:12px">' +
       '<button type="button" onclick="startTest()">Старт</button>' +
       '<button type="button" class="secondary" onclick="stopRun()">Стоп</button>' +
@@ -313,7 +343,11 @@ async function api(path, method, body) {
     opts.body = JSON.stringify(body);
   }
   var res = await fetch(path, opts);
-  var data = await res.json();
+  var text = await res.text();
+  var data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch (e) {
+    throw new Error("Ответ не JSON: HTTP " + res.status);
+  }
   if (!res.ok || data.ok === false) {
     throw new Error((data && data.error) || ("HTTP "+res.status));
   }
@@ -326,56 +360,76 @@ async function loadSettings() {
   renderAlarms();
   renderTimer();
   renderTest();
-  showBanner("");
 }
 
 async function saveAll() {
   try {
+    setBusy(true, "Сохраняю настройки...");
     var body = collectSettings();
     await api("/api/settings", "POST", body);
     await loadSettings();
-    showBanner("");
+    showBanner("Настройки сохранены", "ok");
   } catch (e) {
-    showBanner(String(e.message || e));
+    showBanner("Ошибка сохранения: " + (e.message || e), "error");
+  } finally {
+    setBusy(false);
   }
 }
 
 async function stopRun() {
   try {
+    setBusy(true, "Останавливаю...");
     await api("/api/stop", "POST", {});
+    showBanner("Остановлено", "ok");
+    await refreshStatus(true);
   } catch (e) {
-    showBanner(String(e.message || e));
+    showBanner("Ошибка стопа: " + (e.message || e), "error");
+  } finally {
+    setBusy(false);
   }
 }
 
 async function startTimer() {
   try {
-    await saveAll();
+    setBusy(true, "Сохраняю и запускаю таймер...");
+    var body = collectSettings();
+    await api("/api/settings", "POST", body);
     await api("/api/timer/start", "POST", {});
+    showBanner("Таймер запущен", "ok");
+    await refreshStatus(true);
   } catch (e) {
-    showBanner(String(e.message || e));
+    showBanner("Ошибка таймера: " + (e.message || e), "error");
+  } finally {
+    setBusy(false);
   }
 }
 
 async function startTest() {
   try {
+    setBusy(true, "Запускаю тест...");
     var mode = readMode("x");
     var err = validateMode(mode);
     if (err) throw new Error(err);
     await api("/api/test/start", "POST", mode);
+    showBanner("Тест принят: " + mode.type + ", " + mode.totalSeconds + " с. Смотри синий LED и ленту.", "ok");
+    await refreshStatus(true);
   } catch (e) {
-    showBanner(String(e.message || e));
+    showBanner("Ошибка теста: " + (e.message || e), "error");
+  } finally {
+    setBusy(false);
   }
 }
 
-async function refreshStatus() {
+async function refreshStatus(forceKeepBanner) {
   try {
     var st = await api("/api/status");
     var wifi = st.wifiConnected ? '<span class="ok">WiFi ok</span>' : '<span class="bad">WiFi нет</span>';
     var ntp = st.ntpSynced ? '<span class="ok">NTP ok</span>' : '<span class="bad">NTP нет</span>';
     document.getElementById("statusMeta").innerHTML =
       st.currentTime + " · v" + st.firmwareVersion + " · " + wifi + " · " + ntp +
-      (st.wifiSsid ? (" · " + st.wifiSsid) : "");
+      (st.wifiSsid ? (" · " + st.wifiSsid) : "") +
+      " · PWM GPIO" + (st.pwmPin != null ? st.pwmPin : "?") +
+      " · яркость " + (st.pwmBrightness != null ? st.pwmBrightness : 0) + "%";
     if (!st.activeRun) {
       document.getElementById("activeInfo").textContent = "нет";
     } else {
@@ -385,17 +439,22 @@ async function refreshStatus() {
         r.type + extra + ", режим " + r.mode + ", осталось " + r.remainingSeconds +
         " с, яркость " + r.brightness + "%";
     }
-    showBanner("");
+    if (!forceKeepBanner && Date.now() > bannerHoldUntil) {
+      var el = document.getElementById("banner");
+      if (el.className.indexOf("ok") >= 0 || el.className.indexOf("info") >= 0) {
+        showBanner("");
+      }
+    }
   } catch (e) {
-    showBanner("Нет связи с устройством: " + (e.message || e));
+    showBanner("Нет связи с устройством: " + (e.message || e), "error");
   }
 }
 
-loadSettings().then(refreshStatus).catch(function(e) {
-  showBanner(String(e.message || e));
+loadSettings().then(function() { return refreshStatus(true); }).catch(function(e) {
+  showBanner(String(e.message || e), "error");
   renderTest();
 });
-setInterval(refreshStatus, 2000);
+setInterval(function() { if (!busy) refreshStatus(false); }, 2000);
 </script>
 </body>
 </html>

@@ -232,6 +232,12 @@ int minuteKeyFromTm(const struct tm& nowTm) {
 void setupLedPwm() {
   ledcAttach(LED_PWM_PIN, LED_PWM_FREQUENCY, LED_PWM_RESOLUTION_BITS);
   ledcWrite(LED_PWM_PIN, 0);
+  pinMode(ONBOARD_LED_PIN, OUTPUT);
+#if ONBOARD_LED_ACTIVE_LOW
+  digitalWrite(ONBOARD_LED_PIN, HIGH);
+#else
+  digitalWrite(ONBOARD_LED_PIN, LOW);
+#endif
   currentBrightness = 0;
 }
 
@@ -249,6 +255,13 @@ void setBrightnessPercent(uint8_t percent) {
   }
   currentBrightness = percent;
   ledcWrite(LED_PWM_PIN, brightnessToDuty(percent));
+
+  // Синий LED на плате: горит, когда лента > 0 — видно даже без MOSFET.
+#if ONBOARD_LED_ACTIVE_LOW
+  digitalWrite(ONBOARD_LED_PIN, percent > 0 ? LOW : HIGH);
+#else
+  digitalWrite(ONBOARD_LED_PIN, percent > 0 ? HIGH : LOW);
+#endif
 }
 
 void stopActiveRun() {
@@ -677,6 +690,8 @@ String buildStatusJson() {
   doc["ntpSynced"] = ntpSynced;
   doc["wifiConnected"] = wifiConnected && (WiFi.status() == WL_CONNECTED);
   doc["wifiSsid"] = wifiSsid;
+  doc["pwmPin"] = LED_PWM_PIN;
+  doc["pwmBrightness"] = currentBrightness;
 
   if (activeType == ACTIVE_NONE) {
     doc["activeRun"] = nullptr;
