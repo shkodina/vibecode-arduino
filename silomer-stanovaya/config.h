@@ -4,11 +4,22 @@
 // Все быстрые настройки прошивки. Скетч трогать не обязательно.
 // WiFi STA ssid/пароль в исходники НЕ пишутся — приходят из .env через sborka.sh.
 
+// Версия прошивки. Наращивать +1 при каждой правке прошивки.
+const unsigned long FIRMWARE_VERSION = 1;
+
 // --- пины (Lolin NodeMCU v3 / ESP-12E) ---
 
 // HX711: DT и SCK. Не использовать D8 (GPIO15) — мешает загрузке.
 const int PIN_HX711_DT = D2;   // GPIO4
 const int PIN_HX711_SCK = D1;  // GPIO5
+
+// OLED GM009605 (SSD1306 128x64 I2C). Не делить пины с HX711.
+const int PIN_OLED_SDA = D6;   // GPIO12
+const int PIN_OLED_SCL = D7;   // GPIO13
+const uint8_t OLED_I2C_ADDR = 0x3C;
+const int OLED_SHIRINA = 128;
+const int OLED_VYSOTA = 64;
+const int OLED_RESET_PIN = -1; // у модуля нет отдельного RESET
 
 // Переключатель на 3 контакта (SPDT):
 //   контакт 2 (общий) -> PIN_REZHIM
@@ -29,6 +40,7 @@ const char* AP_PASS = "lolinsilomer";
 const float ZAVOD_TRIGGER_KG = 5.0f;       // кг, порог начала измерения
 const unsigned long ZAVOD_PERIOD_SEC = 10; // сек, длина периода измерения
 const unsigned long ZAVOD_WDT_SEC = 30;    // сек, софтовый вачдог
+const unsigned long ZAVOD_DISPLAY_SWAP_SEC = 3; // сек, смена max на OLED
 const char* ZAVOD_DEVICE_NAME = "silomer-stanovaya";
 
 // Идентификатор модели для веб-админки. Не путать с именем устройства:
@@ -77,7 +89,7 @@ const unsigned long WS_PUSH_MS = 250;    // как часто слать вес 
 // --- EEPROM ---
 
 const int EEPROM_SIZE = 512;
-const uint32_t EEPROM_MAGIC = 0x51C0FE02UL;
+const uint32_t EEPROM_MAGIC = 0x51C0FE03UL;
 
 // Лимиты строк в конфиге.
 const int MAX_SSID_LEN = 32;

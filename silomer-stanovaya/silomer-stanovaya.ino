@@ -1,4 +1,4 @@
-// Силомер становая: Lolin NodeMCU v3 + HX711 + S-образный тензодатчик.
+// Силомер становая: Lolin NodeMCU v3 + HX711 + S-образный тензодатчик + OLED.
 //
 // WiFi-логин и пароль по умолчанию приходят на этапе сборки из .env через
 // WIFI_SSID и WIFI_PASS. В исходниках их не храним.
@@ -10,6 +10,9 @@
 #include <ESP8266WiFi.h>
 #include <HX711.h>
 #include <WebSocketsServer.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 
 #include "config.h"
 
@@ -26,6 +29,7 @@ struct Konfiguraciya {
   float triggerKg;
   uint32_t periodSec;
   uint32_t watchdogSec;
+  uint32_t displaySwapSec;
   float calibrationScale;
   long calibrationOffset;
   float sensorMaxKg;
@@ -37,6 +41,7 @@ struct Konfiguraciya {
 HX711 vesy;
 ESP8266WebServer server(HTTP_PORT);
 WebSocketsServer webSocket(WS_PORT);
+Adafruit_SSD1306 display(OLED_SHIRINA, OLED_VYSOTA, &Wire, OLED_RESET_PIN);
 Konfiguraciya config;
 
 float tekushiyVesKg = 0.0f;
@@ -44,16 +49,26 @@ float maxTekushiyKg = 0.0f;
 float maxProshliyKg = 0.0f;
 
 bool izmerenieAktivno = false;
+bool byloZavershennoeIzmerenie = false;
+bool oledGotov = false;
+bool oledPokazyvatProshliy = false;
 unsigned long startIzmereniyaMs = 0;
 unsigned long posledniyVesVysheTriggeraMs = 0;
 unsigned long posledneeChtenieVesaMs = 0;
 unsigned long poslednyayaOtladkaMs = 0;
 unsigned long poslednyayaWsOtpravkaMs = 0;
+unsigned long poslednyayaSmenaOledMs = 0;
+unsigned long posledneeObnovlenieOledMs = 0;
 unsigned long startMs = 0;
 unsigned long schetchikWs = 0;
 
 bool zaprosPerezagruzkiWdt = false;
 unsigned long startPerezagruzkiWdtMs = 0;
+
+bool zhdatGotovnostHX711();
+bool chitatVesBezZavisaniya(float& vesKg);
+bool sredniySyroyHX711(byte times, long& out);
+void obnovitDispley(bool prinuditelno);
 
 void skopirovatStroku(char* kuda, size_t razmer, const char* otkuda) {
   if (razmer == 0) {
@@ -66,12 +81,17 @@ void skopirovatStroku(char* kuda, size_t razmer, const char* otkuda) {
   kuda[razmer - 1] = '\0';
 }
 
+String ipKontrollera() {
+  return WiFi.getMode() == WIFI_AP ? WiFi.softAPIP().toString() : WiFi.localIP().toString();
+}
+
 void zavodskayaKonfiguraciya() {
   memset(&config, 0, sizeof(config));
   config.magic = EEPROM_MAGIC;
   config.triggerKg = ZAVOD_TRIGGER_KG;
   config.periodSec = ZAVOD_PERIOD_SEC;
   config.watchdogSec = ZAVOD_WDT_SEC;
+  config.displaySwapSec = ZAVOD_DISPLAY_SWAP_SEC;
   config.calibrationScale = ZAVOD_HX711_SCALE;
   config.calibrationOffset = ZAVOD_HX711_OFFSET;
   config.sensorMaxKg = ZAVOD_SENSOR_MAX_KG;
@@ -93,6 +113,7 @@ void zagruzitKonfiguraciyu() {
   if (config.magic != EEPROM_MAGIC ||
       config.periodSec == 0 ||
       config.watchdogSec == 0 ||
+      config.displaySwapSec == 0 ||
       config.calibrationScale == 0.0f ||
       config.sensorMaxKg <= 0.0f ||
       isnan(config.triggerKg)) {
@@ -112,14 +133,16 @@ void zagruzitKonfiguraciyu() {
 }
 
 String jsonKonfiguracii(bool skrytParol) {
-  StaticJsonDocument<640> doc;
+  StaticJsonDocument<768> doc;
   doc["modelId"] = MODEL_ID;
+  doc["firmwareVersion"] = FIRMWARE_VERSION;
   doc["deviceName"] = config.deviceName;
   doc["wifiSsid"] = config.wifiSsid;
   doc["wifiPass"] = skrytParol ? "********" : config.wifiPass;
   doc["triggerKg"] = config.triggerKg;
   doc["periodSec"] = config.periodSec;
   doc["watchdogSec"] = config.watchdogSec;
+  doc["displaySwapSec"] = config.displaySwapSec;
   doc["calibrationScale"] = config.calibrationScale;
   doc["calibrationOffset"] = config.calibrationOffset;
   doc["sensorMaxKg"] = config.sensorMaxKg;
@@ -130,17 +153,19 @@ String jsonKonfiguracii(bool skrytParol) {
 }
 
 String jsonStatusa() {
-  StaticJsonDocument<896> doc;
+  StaticJsonDocument<1024> doc;
   doc["uptimeSec"] = millis() / 1000;
   doc["modelId"] = MODEL_ID;
+  doc["firmwareVersion"] = FIRMWARE_VERSION;
   doc["deviceName"] = config.deviceName;
   doc["wifiMode"] = WiFi.getMode() == WIFI_AP ? "StandAlone" : "UseExistedWiFi";
-  doc["ip"] = WiFi.getMode() == WIFI_AP ? WiFi.softAPIP().toString() : WiFi.localIP().toString();
+  doc["ip"] = ipKontrollera();
   doc["tekushiyVesKg"] = tekushiyVesKg;
   doc["maxTekushiyKg"] = maxTekushiyKg;
   doc["maxProshliyKg"] = maxProshliyKg;
   doc["triggerKg"] = config.triggerKg;
   doc["periodSec"] = config.periodSec;
+  doc["displaySwapSec"] = config.displaySwapSec;
   doc["izmerenieAktivno"] = izmerenieAktivno;
   doc["watchdogSec"] = config.watchdogSec;
   doc["watchdogStatus"] = zaprosPerezagruzkiWdt ? "reboot_requested" : "ok";
@@ -149,6 +174,7 @@ String jsonStatusa() {
   doc["sensorMaxKg"] = config.sensorMaxKg;
   doc["wsClients"] = webSocket.connectedClients();
   doc["hx711Ready"] = vesy.is_ready();
+  doc["oledReady"] = oledGotov;
   doc["freeHeap"] = ESP.getFreeHeap();
 
   String otvet;
@@ -157,18 +183,22 @@ String jsonStatusa() {
 }
 
 void nachatIzmerenie(unsigned long seychas) {
+  if (byloZavershennoeIzmerenie) {
+    maxProshliyKg = maxTekushiyKg;
+  }
   izmerenieAktivno = true;
   startIzmereniyaMs = seychas;
   posledniyVesVysheTriggeraMs = seychas;
   maxTekushiyKg = tekushiyVesKg;
+  oledPokazyvatProshliy = false;
+  poslednyayaSmenaOledMs = seychas;
 }
 
 void zavershitIzmerenie() {
-  if (izmerenieAktivno) {
-    maxProshliyKg = maxTekushiyKg;
-  }
   izmerenieAktivno = false;
-  maxTekushiyKg = 0.0f;
+  byloZavershennoeIzmerenie = true;
+  oledPokazyvatProshliy = false;
+  poslednyayaSmenaOledMs = millis();
 }
 
 void obnovitIzmerenie(unsigned long seychas) {
@@ -219,23 +249,16 @@ void obrabotatVesy() {
 
 void otvetJson(int kod, const String& telo) {
   server.sendHeader("Access-Control-Allow-Origin", "*");
-  server.sendHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  server.sendHeader("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
   server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
   server.send(kod, "application/json", telo);
 }
 
 void otvetCorsOptions() {
   server.sendHeader("Access-Control-Allow-Origin", "*");
-  server.sendHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  server.sendHeader("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
   server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
   server.send(204);
-}
-
-String poluchitArg(const char* imya) {
-  if (server.hasArg(imya)) {
-    return server.arg(imya);
-  }
-  return "";
 }
 
 bool obnovitKonfiguraciyuIzJson(const String& telo, String& oshibka) {
@@ -254,6 +277,9 @@ bool obnovitKonfiguraciyuIzJson(const String& telo, String& oshibka) {
   }
   if (doc.containsKey("watchdogSec")) {
     config.watchdogSec = max(1UL, doc["watchdogSec"].as<unsigned long>());
+  }
+  if (doc.containsKey("displaySwapSec")) {
+    config.displaySwapSec = max(1UL, doc["displaySwapSec"].as<unsigned long>());
   }
   if (doc.containsKey("calibrationScale")) {
     float scale = doc["calibrationScale"].as<float>();
@@ -290,8 +316,82 @@ bool obnovitKonfiguraciyuIzJson(const String& telo, String& oshibka) {
   return true;
 }
 
-String imyaWifiRezhima() {
-  return WiFi.getMode() == WIFI_AP ? "StandAlone" : "UseExistedWiFi";
+bool prochitatParamConfig(const String& imya, String& otvet, String& oshibka) {
+  StaticJsonDocument<192> doc;
+  if (imya == "triggerKg") {
+    doc["triggerKg"] = config.triggerKg;
+  } else if (imya == "periodSec") {
+    doc["periodSec"] = config.periodSec;
+  } else if (imya == "watchdogSec") {
+    doc["watchdogSec"] = config.watchdogSec;
+  } else if (imya == "displaySwapSec") {
+    doc["displaySwapSec"] = config.displaySwapSec;
+  } else if (imya == "calibrationScale") {
+    doc["calibrationScale"] = config.calibrationScale;
+  } else if (imya == "calibrationOffset") {
+    doc["calibrationOffset"] = config.calibrationOffset;
+  } else if (imya == "sensorMaxKg") {
+    doc["sensorMaxKg"] = config.sensorMaxKg;
+  } else if (imya == "deviceName") {
+    doc["deviceName"] = config.deviceName;
+  } else if (imya == "wifiSsid") {
+    doc["wifiSsid"] = config.wifiSsid;
+  } else if (imya == "wifiPass") {
+    doc["wifiPass"] = "********";
+  } else if (imya == "modelId") {
+    doc["modelId"] = MODEL_ID;
+  } else if (imya == "firmwareVersion") {
+    doc["firmwareVersion"] = FIRMWARE_VERSION;
+  } else {
+    oshibka = "unknown config key";
+    return false;
+  }
+  serializeJson(doc, otvet);
+  return true;
+}
+
+bool zapisatParamConfig(const String& imya, const String& telo, String& oshibka) {
+  if (imya == "modelId" || imya == "firmwareVersion") {
+    oshibka = "read-only key";
+    return false;
+  }
+
+  StaticJsonDocument<256> doc;
+  DeserializationError err = deserializeJson(doc, telo);
+  if (err || !doc.containsKey("value")) {
+    oshibka = "json must contain value";
+    return false;
+  }
+
+  StaticJsonDocument<256> patch;
+  if (imya == "triggerKg") {
+    patch["triggerKg"] = doc["value"].as<float>();
+  } else if (imya == "periodSec") {
+    patch["periodSec"] = doc["value"].as<unsigned long>();
+  } else if (imya == "watchdogSec") {
+    patch["watchdogSec"] = doc["value"].as<unsigned long>();
+  } else if (imya == "displaySwapSec") {
+    patch["displaySwapSec"] = doc["value"].as<unsigned long>();
+  } else if (imya == "calibrationScale") {
+    patch["calibrationScale"] = doc["value"].as<float>();
+  } else if (imya == "calibrationOffset") {
+    patch["calibrationOffset"] = doc["value"].as<long>();
+  } else if (imya == "sensorMaxKg") {
+    patch["sensorMaxKg"] = doc["value"].as<float>();
+  } else if (imya == "deviceName") {
+    patch["deviceName"] = doc["value"].as<const char*>();
+  } else if (imya == "wifiSsid") {
+    patch["wifiSsid"] = doc["value"].as<const char*>();
+  } else if (imya == "wifiPass") {
+    patch["wifiPass"] = doc["value"].as<const char*>();
+  } else {
+    oshibka = "unknown config key";
+    return false;
+  }
+
+  String patchTelo;
+  serializeJson(patch, patchTelo);
+  return obnovitKonfiguraciyuIzJson(patchTelo, oshibka);
 }
 
 bool zhdatGotovnostHX711() {
@@ -358,6 +458,86 @@ bool otkalibrovatPoVesu(float etalonKg, String& oshibka) {
   return true;
 }
 
+void nastroitDispley() {
+  Wire.begin(PIN_OLED_SDA, PIN_OLED_SCL);
+  oledGotov = display.begin(SSD1306_SWITCHCAPVCC, OLED_I2C_ADDR);
+  if (!oledGotov) {
+    Serial.println("OLED ne nayden");
+    return;
+  }
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextWrap(false);
+  display.display();
+  Serial.println("OLED gotov");
+}
+
+void narisovatKrupnoeChislo(float vesKg, uint8_t razmer) {
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%.1f", vesKg);
+  display.setTextSize(razmer);
+  display.setTextColor(SSD1306_WHITE);
+  int16_t x1, y1;
+  uint16_t w, h;
+  display.getTextBounds(buf, 0, 0, &x1, &y1, &w, &h);
+  int16_t x = (OLED_SHIRINA - (int16_t)w) / 2;
+  int16_t y = (OLED_VYSOTA - (int16_t)h) / 2;
+  if (x < 0) {
+    x = 0;
+  }
+  if (y < 0) {
+    y = 0;
+  }
+  display.setCursor(x, y);
+  display.print(buf);
+}
+
+void obnovitDispley(bool prinuditelno) {
+  if (!oledGotov) {
+    return;
+  }
+
+  unsigned long seychas = millis();
+  if (!prinuditelno && seychas - posledneeObnovlenieOledMs < 100UL) {
+    return;
+  }
+  posledneeObnovlenieOledMs = seychas;
+
+  if (!izmerenieAktivno && byloZavershennoeIzmerenie) {
+    unsigned long swapMs = config.displaySwapSec * 1000UL;
+    if (seychas - poslednyayaSmenaOledMs >= swapMs) {
+      oledPokazyvatProshliy = !oledPokazyvatProshliy;
+      poslednyayaSmenaOledMs = seychas;
+    }
+  }
+
+  display.clearDisplay();
+
+  if (izmerenieAktivno) {
+    narisovatKrupnoeChislo(tekushiyVesKg, 4);
+  } else if (byloZavershennoeIzmerenie) {
+    if (oledPokazyvatProshliy) {
+      narisovatKrupnoeChislo(maxProshliyKg, 3);
+      display.setTextSize(1);
+      display.setCursor(OLED_SHIRINA - 6, OLED_VYSOTA - 8);
+      display.print("L");
+    } else {
+      narisovatKrupnoeChislo(maxTekushiyKg, 4);
+    }
+  } else {
+    String strokaIp = ipKontrollera() + ":" + String(HTTP_PORT);
+    char strokaVer[24];
+    snprintf(strokaVer, sizeof(strokaVer), "fw %lu", FIRMWARE_VERSION);
+    display.setTextSize(1);
+    display.setCursor(0, 18);
+    display.println(strokaIp);
+    display.setCursor(0, 36);
+    display.println(strokaVer);
+  }
+
+  display.display();
+}
+
 const char* STRANICA_HTML = R"HTML(
 <!doctype html>
 <html lang="ru">
@@ -367,7 +547,7 @@ const char* STRANICA_HTML = R"HTML(
   <title>Силомер становая</title>
   <style>
     body { margin: 0; font-family: Arial, sans-serif; background: #101418; color: #eef3f8; }
-    main { max-width: 900px; margin: 0 auto; padding: 24px; }
+    main { max-width: 900px; margin: 0 auto; padding: 24px 24px 56px; }
     h1 { margin-top: 0; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
     .card, form { background: #1c242d; border: 1px solid #2e3a46; border-radius: 12px; padding: 16px; }
@@ -380,6 +560,7 @@ const char* STRANICA_HTML = R"HTML(
     button.danger { background: #ff6b6b; color: #260000; }
     .action-status { position: sticky; bottom: 0; margin-top: 16px; padding: 12px 14px; border-radius: 10px; background: #233142; color: #dff1ff; min-height: 20px; }
     .action-status.error { background: #4a2020; color: #ffdada; }
+    .fw { position: fixed; right: 12px; bottom: 10px; font-size: 12px; color: #8a98a8; }
     a { color: #8dccff; }
     small { color: #b7c4d0; }
   </style>
@@ -400,6 +581,8 @@ const char* STRANICA_HTML = R"HTML(
     <input id="triggerKg" type="number" step="0.1" min="0">
     <label>Период измерения, сек</label>
     <input id="periodSec" type="number" step="1" min="1">
+    <label>Смена записей на OLED, сек</label>
+    <input id="displaySwapSec" type="number" step="1" min="1">
     <label>Таймаут watchdog, сек</label>
     <input id="watchdogSec" type="number" step="1" min="1">
     <label>Калибровочный коэффициент HX711, raw/кг</label>
@@ -426,6 +609,7 @@ const char* STRANICA_HTML = R"HTML(
   <button class="danger" onclick="rebootWdt(event)">Перезагрузить контроллер через watchdog</button>
   <div id="actionStatus" class="action-status">Готов к работе.</div>
 </main>
+<div class="fw" id="fw">fw --</div>
 <script>
 function kg(x) { return Number(x || 0).toFixed(1); }
 function qs(id) { return document.getElementById(id); }
@@ -451,6 +635,7 @@ async function loadConfig() {
   const c = await fetch('/api/config').then(r => r.json());
   qs('triggerKg').value = c.triggerKg;
   qs('periodSec').value = c.periodSec;
+  qs('displaySwapSec').value = c.displaySwapSec;
   qs('watchdogSec').value = c.watchdogSec;
   qs('calibrationScale').value = c.calibrationScale;
   qs('calibrationOffset').value = c.calibrationOffset;
@@ -458,6 +643,7 @@ async function loadConfig() {
   qs('deviceName').value = c.deviceName;
   qs('wifiSsid').value = c.wifiSsid;
   qs('device').textContent = c.deviceName || 'Силомер';
+  if (c.firmwareVersion != null) qs('fw').textContent = 'fw ' + c.firmwareVersion;
 }
 async function loadStatus() {
   const s = await fetch('/api/status').then(r => r.json());
@@ -465,6 +651,7 @@ async function loadStatus() {
   qs('mc').textContent = kg(s.maxTekushiyKg);
   qs('mp').textContent = kg(s.maxProshliyKg);
   qs('status').textContent = 'режим ' + s.wifiMode + ', uptime ' + s.uptimeSec + ' сек, watchdog ' + s.watchdogStatus;
+  if (s.firmwareVersion != null) qs('fw').textContent = 'fw ' + s.firmwareVersion;
 }
 qs('cfg').addEventListener('submit', async function(e) {
   e.preventDefault();
@@ -472,6 +659,7 @@ qs('cfg').addEventListener('submit', async function(e) {
   const payload = {
     triggerKg: Number(qs('triggerKg').value),
     periodSec: Number(qs('periodSec').value),
+    displaySwapSec: Number(qs('displaySwapSec').value),
     watchdogSec: Number(qs('watchdogSec').value),
     calibrationScale: Number(qs('calibrationScale').value),
     calibrationOffset: Number(qs('calibrationOffset').value),
@@ -566,11 +754,24 @@ const char* OPENAPI_JSON = R"JSON(
   "info": {"title": "Silomer Stanovaya API", "version": "1.0.0"},
   "paths": {
     "/api/config": {
-      "get": {"summary": "Read configuration", "responses": {"200": {"description": "Config JSON"}}},
-      "post": {"summary": "Update configuration", "responses": {"200": {"description": "Updated config JSON"}}}
+      "get": {"summary": "Read all configuration", "responses": {"200": {"description": "Config JSON"}}},
+      "post": {"summary": "Replace/update configuration fields from one JSON body", "responses": {"200": {"description": "Updated config JSON"}}}
+    },
+    "/api/config/{key}": {
+      "get": {
+        "summary": "Read one configuration parameter",
+        "parameters": [{"name": "key", "in": "path", "required": true, "schema": {"type": "string", "enum": ["triggerKg", "periodSec", "watchdogSec", "displaySwapSec", "calibrationScale", "calibrationOffset", "sensorMaxKg", "deviceName", "wifiSsid", "wifiPass", "modelId", "firmwareVersion"]}}],
+        "responses": {"200": {"description": "Single-key JSON"}, "404": {"description": "Unknown key"}}
+      },
+      "put": {
+        "summary": "Set one configuration parameter",
+        "parameters": [{"name": "key", "in": "path", "required": true, "schema": {"type": "string", "enum": ["triggerKg", "periodSec", "watchdogSec", "displaySwapSec", "calibrationScale", "calibrationOffset", "sensorMaxKg", "deviceName", "wifiSsid", "wifiPass"]}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["value"], "properties": {"value": {}}}}}},
+        "responses": {"200": {"description": "Updated single-key JSON"}, "400": {"description": "Bad request"}, "404": {"description": "Unknown key"}}
+      }
     },
     "/api/status": {
-      "get": {"summary": "Read current controller status", "responses": {"200": {"description": "Status JSON"}}}
+      "get": {"summary": "Read current controller status (includes firmwareVersion)", "responses": {"200": {"description": "Status JSON"}}}
     },
     "/api/reset": {
       "post": {"summary": "Factory reset configuration", "responses": {"200": {"description": "Factory config JSON"}}}
@@ -665,7 +866,55 @@ void otdatOpenApi() {
   server.send(200, "application/json", OPENAPI_JSON);
 }
 
+bool obrabotatConfigParamPoUri() {
+  String uri = server.uri();
+  if (!uri.startsWith("/api/config/")) {
+    return false;
+  }
+
+  String imya = uri.substring(String("/api/config/").length());
+  if (imya.length() == 0 || imya.indexOf('/') >= 0) {
+    return false;
+  }
+
+  if (server.method() == HTTP_OPTIONS) {
+    otvetCorsOptions();
+    return true;
+  }
+
+  String otvet;
+  String oshibka;
+  if (server.method() == HTTP_GET) {
+    if (!prochitatParamConfig(imya, otvet, oshibka)) {
+      otvetJson(404, "{\"error\":\"" + oshibka + "\"}");
+      return true;
+    }
+    otvetJson(200, otvet);
+    return true;
+  }
+
+  if (server.method() == HTTP_PUT) {
+    if (!zapisatParamConfig(imya, server.arg("plain"), oshibka)) {
+      int kod = (oshibka == "unknown config key") ? 404 : 400;
+      otvetJson(kod, "{\"error\":\"" + oshibka + "\"}");
+      return true;
+    }
+    if (!prochitatParamConfig(imya, otvet, oshibka)) {
+      otvetJson(500, "{\"error\":\"read after write failed\"}");
+      return true;
+    }
+    otvetJson(200, otvet);
+    return true;
+  }
+
+  otvetJson(405, "{\"error\":\"method not allowed\"}");
+  return true;
+}
+
 void otdatNeNajdeno() {
+  if (obrabotatConfigParamPoUri()) {
+    return;
+  }
   if (server.method() == HTTP_OPTIONS) {
     otvetCorsOptions();
     return;
@@ -799,6 +1048,7 @@ void setup() {
   startMs = millis();
 
   zagruzitKonfiguraciyu();
+  nastroitDispley();
   nastroitVesy();
   zapustitWifi();
   nastroitMarshruty();
@@ -806,6 +1056,7 @@ void setup() {
   server.begin();
   webSocket.begin();
   webSocket.onEvent(obrabotatWs);
+  obnovitDispley(true);
 
   Serial.println("HTTP server gotov.");
   Serial.println("WebSocket gotov.");
@@ -815,6 +1066,7 @@ void loop() {
   server.handleClient();
   webSocket.loop();
   obrabotatVesy();
+  obnovitDispley(false);
   otpravitWsStatus();
   obrabotatOtladku();
   obrabotatPerezagruzkuWdt();

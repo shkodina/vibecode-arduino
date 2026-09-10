@@ -135,7 +135,7 @@ def test_firmware_avoids_infinite_hx711_wait_and_http_reentrancy():
         assert token in firmware
 
     # Inside zhdatGotovnostHX711 there must be no nested HTTP handling.
-    wait_fn = firmware.split("bool zhdatGotovnostHX711()")[1].split("bool otkalibrovatPoVesu")[0]
+    wait_fn = firmware.split("bool zhdatGotovnostHX711() {")[1].split("bool chitatVesBezZavisaniya")[0]
     assert "server.handleClient();" not in wait_fn
     assert "wait_ready_timeout(" in wait_fn
 

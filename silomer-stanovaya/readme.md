@@ -1,9 +1,9 @@
 # silomer-stanovaya
 
-Силомер для становой тяги на Lolin NodeMCU v3, HX711 и S-образном
-тензодатчике YZC-516C 1t. Контроллер показывает текущий вес, максимум
-текущего измерения и максимум прошлого измерения через веб-страницу, JSON API
-и WebSocket.
+Силомер для становой тяги на Lolin NodeMCU v3, HX711, OLED GM009605 и
+S-образном тензодатчике YZC-516C 1t. Контроллер показывает текущий вес,
+максимум текущего измерения и максимум прошлого измерения через OLED,
+веб-страницу, JSON API и WebSocket.
 
 ## Идея и цель
 
@@ -29,11 +29,15 @@ watchdog-таймаут и начальная калибровка HX711.
        +----------------------------------+
        |        Lolin NodeMCU v3          |
        |                                  |
-       |  3V3  ---------------- HX711 VCC |
-       |  GND  -----+---------- HX711 GND |
-       |            |                     |
+       |  3V3  ----+---------- HX711 VCC  |
+       |           +---------- OLED VCC   |
+       |  GND  ----+---------- HX711 GND  |
+       |           +---------- OLED GND   |
+       |                                  |
        |  D2 GPIO4  ------------ HX711 DT |
        |  D1 GPIO5  ------------ HX711 SCK|
+       |  D6 GPIO12 ------------ OLED SDA |
+       |  D7 GPIO13 ------------ OLED SCL |
        |                                  |
        |  D5 GPIO14 --------+             |
        |                    |             |
@@ -53,6 +57,14 @@ watchdog-таймаут и начальная калибровка HX711.
        | S+ / A+  |--------------| A+     |
        | S- / A-  |--------------| A-     |
        +----------+              +--------+
+
+       OLED GM009605 v4.2 (SSD1306 128x64 I2C)
+       +----------+
+       | VCC      |---- 3V3
+       | GND      |---- GND
+       | SDA      |---- D6 (GPIO12)
+       | SCL/SCK  |---- D7 (GPIO13)
+       +----------+
 ```
 
 Полная коммутация режима:
@@ -67,9 +79,20 @@ watchdog-таймаут и начальная калибровка HX711.
 красный `E+`, чёрный `E-`, зелёный `A+`, белый `A-`. Перед пайкой лучше
 проверить маркировку или паспорт конкретного датчика.
 
-HX711 питается от `3V3`, чтобы его цифровой выход `DT` не отдавал 5 В на вход
-ESP8266. Земля Lolin, HX711 и переключателя должна быть общей. Пин `D8` не
-используется, потому что `GPIO15` участвует в загрузке ESP8266.
+HX711 и OLED питаются от `3V3`, чтобы цифровой выход `DT` и логика дисплея
+не отдавали 5 В на вход ESP8266. Земля Lolin, HX711, OLED и переключателя
+должна быть общей. OLED сидит на отдельных I2C-пинах `D6`/`D7`, потому что
+`D1`/`D2` заняты HX711. На многих модулях GM009605 пин `SCK` = I2C `SCL`.
+Адрес дисплея обычно `0x3C`. Пин `D8` не используется, потому что `GPIO15`
+участвует в загрузке ESP8266.
+
+На OLED:
+
+- до первого измерения: `IP:порт` и версия прошивки в две строки;
+- во время измерения: текущий вес крупными цифрами с одной десятичной;
+- после измерения: чередование текущего максимума (крупнее) и прошлого
+  максимума (мельче, с микро-меткой `L` справа внизу) раз в
+  `displaySwapSec` секунд (заводское значение `3`).
 
 ## Что делает прошивка
 
@@ -88,7 +111,9 @@ ESP8266. Земля Lolin, HX711 и переключателя должна бы
 - измерение начинается, когда вес стал не меньше `triggerKg`;
 - максимум текущего измерения копится в `maxTekushiyKg`;
 - когда истёк `periodSec` или вес упал ниже триггера дольше чем на
-  `PAUZA_KONCA_IZMERENIYA_MS`, максимум переносится в `maxProshliyKg`.
+  `PAUZA_KONCA_IZMERENIYA_MS`, измерение завершается, а `maxTekushiyKg`
+  сохраняется на экране/вебе; при старте следующего измерения прежний
+  максимум уходит в `maxProshliyKg`.
 
 ## Веб-страница
 
@@ -105,7 +130,9 @@ ESP8266. Земля Lolin, HX711 и переключателя должна бы
 - максимальный вес прошлого измерения в кг;
 - настройка триггерного веса в кг;
 - настройка периода измерения в секундах;
+- настройка смены записей на OLED в секундах (`displaySwapSec`);
 - настройка watchdog-таймаута в секундах;
+- версия прошивки справа внизу (`fw N`);
 - настройка логина и скрытого пароля новой WiFi-сети;
 - настройка имени устройства для будущей веб-админки;
 - сброс всех настроек в заводские;
@@ -134,11 +161,13 @@ ESP8266. Земля Lolin, HX711 и переключателя должна бы
 ```json
 {
   "modelId": "silomer-stanovaya",
+  "firmwareVersion": 1,
   "deviceName": "silomer-stanovaya",
   "wifiSsid": "MoyaWiFiSet",
   "wifiPass": "********",
   "triggerKg": 5.0,
   "periodSec": 10,
+  "displaySwapSec": 3,
   "watchdogSec": 30,
   "calibrationScale": 4718.0,
   "calibrationOffset": 0,
@@ -153,12 +182,18 @@ ESP8266. Земля Lolin, HX711 и переключателя должна бы
 устройства. На веб-странице `modelId` не показывается и через веб/API
 не меняется.
 
-`POST /api/config` принимает JSON с любыми из полей:
+`firmwareVersion` - константа `FIRMWARE_VERSION` из `config.h`. Её
+наращивают на `+1` при каждой правке прошивки. Через API её нельзя
+изменить, только прочитать.
+
+`POST /api/config` принимает JSON с любыми из полей и обновляет их
+одним телом:
 
 ```json
 {
   "triggerKg": 20.0,
   "periodSec": 15,
+  "displaySwapSec": 3,
   "watchdogSec": 30,
   "calibrationScale": 4718.0,
   "calibrationOffset": 0,
@@ -169,12 +204,22 @@ ESP8266. Земля Lolin, HX711 и переключателя должна бы
 }
 ```
 
+Один параметр можно читать и менять отдельно:
+
+- `GET /api/config/<ключ>` → например `{"displaySwapSec":3}`
+- `PUT /api/config/<ключ>` с телом `{"value":3}`
+
+Ключи: `triggerKg`, `periodSec`, `watchdogSec`, `displaySwapSec`,
+`calibrationScale`, `calibrationOffset`, `sensorMaxKg`, `deviceName`,
+`wifiSsid`, `wifiPass`. Только чтение: `modelId`, `firmwareVersion`.
+
 `GET /api/status` возвращает статус:
 
 ```json
 {
   "uptimeSec": 123,
   "modelId": "silomer-stanovaya",
+  "firmwareVersion": 1,
   "deviceName": "silomer-stanovaya",
   "wifiMode": "UseExistedWiFi",
   "ip": "192.168.1.50",
@@ -183,6 +228,7 @@ ESP8266. Земля Lolin, HX711 и переключателя должна бы
   "maxProshliyKg": 44.1,
   "triggerKg": 5.0,
   "periodSec": 10,
+  "displaySwapSec": 3,
   "izmerenieAktivno": true,
   "watchdogSec": 30,
   "watchdogStatus": "ok",
@@ -191,6 +237,7 @@ ESP8266. Земля Lolin, HX711 и переключателя должна бы
   "sensorMaxKg": 1000.0,
   "wsClients": 1,
   "hx711Ready": true,
+  "oledReady": true,
   "freeHeap": 22000
 }
 ```
@@ -305,6 +352,9 @@ arduino-cli core install esp8266:esp8266
 arduino-cli lib install "HX711 Arduino Library"
 arduino-cli lib install "ArduinoJson"
 arduino-cli lib install "WebSockets"
+arduino-cli lib install "Adafruit SSD1306"
+arduino-cli lib install "Adafruit GFX Library"
+arduino-cli lib install "Adafruit BusIO"
 ```
 
 Плата Lolin NodeMCU v3 собирается как `esp8266:esp8266:nodemcuv2`.
