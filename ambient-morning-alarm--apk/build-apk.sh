@@ -12,12 +12,15 @@ ALIAS="piper-light-alarm"
 STORE_PASS="piper-light-alarm"
 KEY_PASS="piper-light-alarm"
 
-if command -v docker >/dev/null 2>&1; then
+# root → docker напрямую; обычный пользователь → через sudo
+if [[ "$(id -u)" -eq 0 ]]; then
   DOCKER=(docker)
-elif command -v podman >/dev/null 2>&1; then
-  DOCKER=(podman)
 else
-  echo "Docker/Podman не найден. Установи Docker на Ubuntu 22.04 и повтори." >&2
+  DOCKER=(sudo docker)
+fi
+
+if ! "${DOCKER[@]}" version >/dev/null 2>&1; then
+  echo "Docker недоступен (${DOCKER[*]}). Установи Docker и повтори." >&2
   exit 1
 fi
 
