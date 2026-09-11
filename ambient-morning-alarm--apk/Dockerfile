@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openjdk-17-jdk \
     curl \
     unzip \
+    xz-utils \
     git \
     bash \
     ca-certificates \
