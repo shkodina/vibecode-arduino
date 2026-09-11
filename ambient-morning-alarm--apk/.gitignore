@@ -1,0 +1,60 @@
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native build outputs (prebuild regenerates android/ in Docker)
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+.env*.local
+
+# typescript
+*.tsbuildinfo
+
+# Android / iOS generated & build
+/ios
+/android
+.gradle/
+build/
+app/build/
+android/.gradle/
+android/app/build/
+android/build/
+android/keystore.properties
+
+# APK outputs and signing material
+out/
+keystore/
+*.apk
+local.properties
+
+# scaffold leftovers
+.claude/
+AGENTS.md
+CLAUDE.md
+
+__pycache__/
+*.pyc

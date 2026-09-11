@@ -116,15 +116,16 @@ status notify UUID:  7c1b0003-7df0-4b6f-bc6f-a110c0000001
 
 ## Технологический выбор
 
-Рекомендуемый стек для агента:
+Выбранный стек:
 
-- Kotlin;
-- Gradle Android plugin;
-- обычные Android Views или Jetpack Compose.
+- React Native через Expo Dev Client (SDK 57);
+- `react-native-ble-plx` для BLE;
+- TypeScript;
+- `expo prebuild` генерирует Android-проект внутри Docker перед Gradle release.
 
-Если агент выбирает Compose, Docker-сборка должна ставить совместимые версии
-Gradle, Kotlin и Android Gradle Plugin. Если выбирает Views, UI можно сделать
-быстрее и с меньшим числом зависимостей.
+Имя устройства ищется по префиксу `piper-light-alarm-` (версия прошивки в
+суффиксе может меняться). WiFi вынесен на отдельную вкладку через
+`getWifi` / `setWifi`.
 
 Главный критерий: APK должен собираться в Docker на Ubuntu 22.04 и
 устанавливаться на Redmi Note 12.
