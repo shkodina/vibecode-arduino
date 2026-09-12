@@ -19,11 +19,19 @@
    прошивки. Истина по текущему поведению — этот readme и код после него.
 4. Соседний `../ambient-morning-alarm--apk/` не трогай, пока об этом не
    попросили. Общий JSON-контракт один: `ramp` / `pulse` (`glowSeconds`,
-   `fadeSeconds`) / `strobe`, BLE `setAlarm`.
+   `fadeSeconds`) / `strobe`, BLE `setAlarm` / `setTimer`.
 5. После доработки сразу допиши сюда: версию, API, поля JSON, поведение
    веба, грабли. Иначе следующий агент снова полезет во все файлы.
 
-Текущая прошивка: **00.00.013**. BLE-имя: `piper-light-alarm-0000013`.
+Текущая прошивка: **00.00.016**. BLE-имя: `piper-light-alarm-0000016`.
+
+Что сделано в 00.00.016:
+
+- BLE-куски ответа уменьшены с 180 до 96 байт: обёртка
+  `{chunkIndex,chunkCount,data}` при MTU 185 больше не обрезалась, и
+  `getSettings` в приложении не собирался (будильники как с завода).
+- BLE `setTimer` — сохранить только таймер, без полного `setSettings`.
+  Полный JSON настроек не влезает в одну GATT write (Operation rejected).
 
 Что сделано в 00.00.013:
 
@@ -297,7 +305,7 @@ NVS: namespace `alarm`. Ключ `settings` — весь JSON строкой. SS
 ```json
 {
   "currentTime": "2026-09-12T10:15:00",
-  "firmwareVersion": "00.00.013",
+  "firmwareVersion": "00.00.016",
   "radioMode": "wifi",
   "ntpSynced": true,
   "wifiConnected": true,
@@ -395,10 +403,12 @@ ESP32-C3 не умеет Bluetooth Classic SPP, канал — BLE GATT.
 - Response notify/read: `7c1b0002-7df0-4b6f-bc6f-a110c0000001`
 - Status notify каждые 2 с: `7c1b0003-7df0-4b6f-bc6f-a110c0000001`
 
-Команды: `getSettings`, `setSettings`, `setAlarm`, `getWifi`, `setWifi`,
-`getStatus`, `stop`, `startTimer`, `startTest`, `stopTest`.
+Команды: `getSettings`, `setSettings`, `setAlarm`, `setTimer`, `getWifi`,
+`setWifi`, `getStatus`, `setTime`, `stop`, `startTimer`, `startTest`,
+`stopTest`.
 
 `setAlarm` — тот же объект будильника, что `POST /api/alarm`, в `payload`.
+`setTimer` — объект таймера `{ hours, minutes, mode }`.
 
 ```json
 { "requestId": "8", "command": "setWifi", "payload": { "ssid": "Home", "password": "secret" } }
@@ -408,12 +418,13 @@ Pairing зависит от телефона и стека ESP32 Arduino. Про
 и passkey `8888`. Если окно PIN не показалось, GATT write после connect всё
 равно принимается.
 
-Большие ответы режутся на `{chunkIndex, chunkCount, data}`, кусок 180 байт.
+Большие ответы режутся на `{chunkIndex, chunkCount, data}`, кусок 96 байт
+(чтобы вместе с обёрткой влезать в notify при MTU 185).
 
 ## Версия
 
 ```text
-00.00.013
+00.00.016
 ```
 
 Формат статуса: две цифры major, две minor, три patch. BLE-имя — те же цифры
@@ -496,7 +507,6 @@ Windows `python -m esptool`. Закрой Serial Monitor, иначе COM зан�
 
 ## Дальнейшие доработки
 
-- в APK показать `nextAlarm` в шапке, как баннер веба
 - часовой пояс / DST без жёсткого `GMT_OFFSET_SEC`
 - OTA обновление прошивки
 - сохранение незавершённого теста при потере BLE

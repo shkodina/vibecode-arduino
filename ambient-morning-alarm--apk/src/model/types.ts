@@ -46,6 +46,14 @@ export type ActiveRun = {
   brightness: number;
 };
 
+export type NextAlarm = {
+  id: number;
+  hour: number;
+  minute: number;
+  inSeconds: number;
+  at?: string;
+};
+
 export type DeviceStatus = {
   currentTime: string;
   firmwareVersion: string;
@@ -53,6 +61,7 @@ export type DeviceStatus = {
   wifiConnected: boolean;
   wifiSsid?: string;
   activeRun: ActiveRun | null;
+  nextAlarm?: NextAlarm | null;
 };
 
 export type BleClientState =
@@ -185,10 +194,31 @@ export function normalizeAlarm(raw: Partial<AlarmConfig> | undefined, fallbackId
   };
 }
 
+export function asDeviceSettings(payload: unknown): DeviceSettings | null {
+  let value = payload;
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (!value || typeof value !== 'object' || !('alarms' in value)) {
+    return null;
+  }
+  return value as DeviceSettings;
+}
+
 export function normalizeSettings(raw?: Partial<DeviceSettings> | null): DeviceSettings {
   const defaults = defaultSettings();
+  const incoming = Array.isArray(raw?.alarms) ? raw.alarms : [];
+  const byId = new Map<number, Partial<AlarmConfig>>();
+  incoming.forEach((alarm, index) => {
+    const id = typeof alarm?.id === 'number' ? alarm.id : index;
+    byId.set(id, alarm);
+  });
   const alarms = Array.from({ length: ALARM_COUNT }, (_, id) =>
-    normalizeAlarm(raw?.alarms?.[id], id),
+    normalizeAlarm(byId.get(id), id),
   );
   return {
     wifi: {

@@ -6,7 +6,7 @@ import { colors, spacing } from '../theme';
 import { validateTimer } from '../validation';
 
 export function TimerScreen() {
-  const { settings, setSettings, saveSettings, startTimer, stop, busy } = useDevice();
+  const { settings, setSettings, saveTimer, startTimer, stop, busy } = useDevice();
   const [localError, setLocalError] = useState<string | null>(null);
   const timer = settings.timer;
 
@@ -58,7 +58,7 @@ export function TimerScreen() {
             return;
           }
           setLocalError(null);
-          void saveSettings();
+          void saveTimer();
         }}
       >
         <Text style={styles.btnText}>Сохранить</Text>

@@ -4,7 +4,7 @@
 // Версия прошивки: статус "00.00.001", BLE-имя "piper-light-alarm-0000001".
 #define FIRMWARE_VERSION_MAJOR 0
 #define FIRMWARE_VERSION_MINOR 0
-#define FIRMWARE_VERSION_PATCH 15
+#define FIRMWARE_VERSION_PATCH 16
 
 #define BLUETOOTH_PIN "8888"
 #define BLUETOOTH_NAME_PREFIX "piper-light-alarm-"
@@ -63,7 +63,9 @@
 #define WIFI_PASS_MAX_LEN 63
 
 #define STATUS_NOTIFY_INTERVAL_MS 10000
-#define BLE_CHUNK_SIZE 180
+// Обёртка {"chunkIndex","chunkCount","data"} ~50 байт. При MTU 185
+// notify максимум ~182, поэтому кусок данных должен быть заметно меньше 180.
+#define BLE_CHUNK_SIZE 96
 
 // Дефолт ramp: медленный розжиг ~20 мин, всего 30 мин.
 #define DEFAULT_RAMP_START_BRIGHTNESS 5

@@ -1,11 +1,29 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { describeActiveRun, resolveActiveMode } from '../model/lightPhase';
+import { describeNextAlarm } from '../model/nextAlarm';
 import { useDevice } from '../context/DeviceContext';
 import { colors, spacing } from '../theme';
 
 export function StatusHeader() {
-  const { status, bleState, deviceName, banner, busy, connect, stop } = useDevice();
+  const { status, statusAt, settings, testMode, bleState, deviceName, banner, busy, connect, stop } = useDevice();
+  const [now, setNow] = useState(Date.now());
   const active = status?.activeRun;
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const elapsedSinceStatus = statusAt ? Math.max(0, Math.floor((now - statusAt) / 1000)) : 0;
+  const displayedRemaining = active
+    ? Math.max(0, active.remainingSeconds - elapsedSinceStatus)
+    : 0;
+  const mode = active ? resolveActiveMode(active, settings, testMode) : null;
+  const phase = active ? describeActiveRun(active, mode, displayedRemaining) : '';
+  const stale = Boolean(active && bleState !== 'Connected');
+  const nextAlarmText = describeNextAlarm(status, elapsedSinceStatus);
+  const connectLabel = bleState === 'Connected' ? 'Обновить' : 'Подключить';
 
   return (
     <View style={styles.wrap}>
@@ -21,7 +39,7 @@ export function StatusHeader() {
           </Text>
         </View>
         <Pressable style={styles.btn} onPress={() => void connect()} disabled={busy}>
-          {busy ? <ActivityIndicator color={colors.text} /> : <Text style={styles.btnText}>Подключить</Text>}
+          {busy ? <ActivityIndicator color={colors.text} /> : <Text style={styles.btnText}>{connectLabel}</Text>}
         </Pressable>
       </View>
 
@@ -31,14 +49,21 @@ export function StatusHeader() {
         </View>
       ) : null}
 
+      {nextAlarmText ? (
+        <View style={styles.next}>
+          <Text style={styles.nextText}>{nextAlarmText}</Text>
+        </View>
+      ) : null}
+
       {active ? (
         <View style={styles.active}>
           <Text style={styles.activeTitle}>
             Активно: {active.type}
-            {active.alarmId != null ? ` #${active.alarmId}` : ''} · {active.mode}
+            {active.alarmId != null ? ` #${active.alarmId}` : ''} · {phase}
           </Text>
           <Text style={styles.meta}>
-            осталось {active.remainingSeconds}s · яркость {active.brightness}%
+            осталось {displayedRemaining}s · яркость {active.brightness}%
+            {stale ? ' · оценка, связи нет' : ''}
           </Text>
           <Pressable style={[styles.btn, styles.stop]} onPress={() => void stop()} disabled={busy}>
             <Text style={styles.btnText}>Остановить</Text>
@@ -80,6 +105,14 @@ const styles = StyleSheet.create({
     padding: spacing.sm,
   },
   bannerText: { color: colors.danger },
+  next: {
+    backgroundColor: '#1a1a12',
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: spacing.sm,
+  },
+  nextText: { color: colors.accent, fontWeight: '600' },
   active: {
     backgroundColor: '#2a1a0a',
     borderColor: colors.accent,

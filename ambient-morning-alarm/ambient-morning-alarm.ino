@@ -1411,6 +1411,23 @@ void handleBleCommandJson(const String& body) {
   } else if (command == "stop" || command == "stopTest") {
     stopActiveRun();
     pendingBleResponse = wrapBleSuccess(requestId, "null");
+  } else if (command == "setTimer") {
+    String errorMessage;
+    JsonObjectConst payload = doc["payload"].as<JsonObjectConst>();
+    TimerConfig nextTimer;
+    if (payload.isNull()) {
+      pendingBleResponse = wrapBleError(requestId, "payload-missing");
+    } else {
+      nextTimer.hours = payload["hours"] | 0;
+      nextTimer.minutes = payload["minutes"] | 0;
+      if (!modeFromJson(payload["mode"].as<JsonObjectConst>(), nextTimer.mode, errorMessage)) {
+        pendingBleResponse = wrapBleError(requestId, errorMessage);
+      } else if (!updateTimerConfig(nextTimer)) {
+        pendingBleResponse = wrapBleError(requestId, errorMessage.length() ? errorMessage : "timer-invalid");
+      } else {
+        pendingBleResponse = wrapBleSuccess(requestId, "null");
+      }
+    }
   } else if (command == "startTimer") {
     startTimer();
     pendingBleResponse = wrapBleSuccess(requestId, "null");

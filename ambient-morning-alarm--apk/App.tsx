@@ -6,16 +6,16 @@ import { DeviceProvider } from './src/context/DeviceContext';
 import { AlarmsScreen } from './src/screens/AlarmsScreen';
 import { TestScreen } from './src/screens/TestScreen';
 import { TimerScreen } from './src/screens/TimerScreen';
-import { WifiScreen } from './src/screens/WifiScreen';
+import { SettingsScreen } from './src/screens/SettingsScreen';
 import { colors } from './src/theme';
 
-type TabId = 'alarms' | 'timer' | 'test' | 'wifi';
+type TabId = 'alarms' | 'timer' | 'test' | 'settings';
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'alarms', label: 'Будильники' },
   { id: 'timer', label: 'Таймер' },
   { id: 'test', label: 'Тест' },
-  { id: 'wifi', label: 'WiFi' },
+  { id: 'settings', label: 'Настройки' },
 ];
 
 function AppShell() {
@@ -29,7 +29,7 @@ function AppShell() {
         {tab === 'alarms' ? <AlarmsScreen /> : null}
         {tab === 'timer' ? <TimerScreen /> : null}
         {tab === 'test' ? <TestScreen /> : null}
-        {tab === 'wifi' ? <WifiScreen /> : null}
+        {tab === 'settings' ? <SettingsScreen /> : null}
       </View>
       <View style={styles.tabs}>
         {TABS.map((item) => (
