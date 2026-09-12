@@ -14,6 +14,7 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <BLESecurity.h>
+#include "esp_task_wdt.h"
 
 #include "config.h"
 #include "web_page.h"
@@ -30,6 +31,8 @@
 String wifiSsid;
 String wifiPass;
 bool wifiNeedsReconnect = false;
+uint32_t watchdogSeconds = DEFAULT_WATCHDOG_SECONDS;
+bool sntpStarted = false;
 
 enum LightModeType {
   LIGHT_MODE_RAMP,
@@ -199,8 +202,47 @@ bool setWifiCredentials(const String& ssid, const String& password, String& erro
   return true;
 }
 
+void feedWatchdog() {
+  esp_task_wdt_reset();
+}
+
+void applyWatchdog() {
+  if (watchdogSeconds < WATCHDOG_SECONDS_MIN) {
+    watchdogSeconds = WATCHDOG_SECONDS_MIN;
+  }
+  if (watchdogSeconds > WATCHDOG_SECONDS_MAX) {
+    watchdogSeconds = WATCHDOG_SECONDS_MAX;
+  }
+
+  esp_task_wdt_config_t cfg = {
+    .timeout_ms = watchdogSeconds * 1000UL,
+    .idle_core_mask = 0,
+    .trigger_panic = true,
+  };
+  esp_err_t err = esp_task_wdt_reconfigure(&cfg);
+  if (err == ESP_ERR_INVALID_STATE) {
+    err = esp_task_wdt_init(&cfg);
+  }
+  err = esp_task_wdt_add(NULL);
+  (void)err;
+  feedWatchdog();
+}
+
+bool setWatchdogSeconds(uint32_t seconds, String& errorMessage) {
+  if (seconds < WATCHDOG_SECONDS_MIN || seconds > WATCHDOG_SECONDS_MAX) {
+    errorMessage = "watchdog-out-of-range";
+    return false;
+  }
+  if (watchdogSeconds != seconds) {
+    watchdogSeconds = seconds;
+    applyWatchdog();
+  }
+  return true;
+}
+
 void applyDefaultSettings() {
   applyFactoryWifiDefaults();
+  watchdogSeconds = DEFAULT_WATCHDOG_SECONDS;
 
   for (uint8_t i = 0; i < ALARM_COUNT; i++) {
     alarms[i].id = i;
@@ -550,6 +592,7 @@ void settingsToJson(JsonDocument& doc) {
   timerObj["hours"] = timerConfig.hours;
   timerObj["minutes"] = timerConfig.minutes;
   modeToJson(timerObj["mode"].to<JsonObject>(), timerConfig.mode);
+  doc["watchdogSeconds"] = watchdogSeconds;
 }
 
 String buildSettingsJson() {
@@ -606,10 +649,20 @@ bool applySettingsFromDoc(JsonVariantConst root, String& errorMessage) {
     return false;
   }
 
+  uint32_t nextWatchdog = watchdogSeconds;
+  if (!root["watchdogSeconds"].isNull()) {
+    nextWatchdog = root["watchdogSeconds"] | 0;
+    if (nextWatchdog < WATCHDOG_SECONDS_MIN || nextWatchdog > WATCHDOG_SECONDS_MAX) {
+      errorMessage = "watchdog-out-of-range";
+      return false;
+    }
+  }
+
   for (uint8_t i = 0; i < ALARM_COUNT; i++) {
     alarms[i] = nextAlarms[i];
   }
   timerConfig = nextTimer;
+  watchdogSeconds = nextWatchdog;
   return true;
 }
 
@@ -624,10 +677,10 @@ bool applySettingsJson(const String& body, String& errorMessage) {
     return false;
   }
   saveSettings();
+  applyWatchdog();
   if (wifiNeedsReconnect) {
     wifiNeedsReconnect = false;
     tryConnectWifi(true);
-    trySyncNtp(true);
   }
   return true;
 }
@@ -665,12 +718,23 @@ void saveSettings() {
   preferences.putString(PREFERENCES_KEY_SETTINGS, json);
   preferences.putString(PREFERENCES_KEY_WIFI_SSID, wifiSsid);
   preferences.putString(PREFERENCES_KEY_WIFI_PASS, wifiPass);
+  preferences.putUInt(PREFERENCES_KEY_WATCHDOG, watchdogSeconds);
   preferences.end();
+}
+
+void loadWatchdogFromNvs() {
+  preferences.begin(PREFERENCES_NAMESPACE, true);
+  const uint32_t stored = preferences.getUInt(PREFERENCES_KEY_WATCHDOG, 0);
+  preferences.end();
+  if (stored >= WATCHDOG_SECONDS_MIN && stored <= WATCHDOG_SECONDS_MAX) {
+    watchdogSeconds = stored;
+  }
 }
 
 void loadSettings() {
   applyDefaultSettings();
   loadWifiCredentials();
+  loadWatchdogFromNvs();
 
   preferences.begin(PREFERENCES_NAMESPACE, true);
   String json = preferences.getString(PREFERENCES_KEY_SETTINGS, "");
@@ -689,10 +753,12 @@ void loadSettings() {
   const bool hadWifiInJson = doc["wifi"].is<JsonObject>();
   String keepSsid = wifiSsid;
   String keepPass = wifiPass;
+  const uint32_t keepWatchdog = watchdogSeconds;
   if (!applySettingsFromDoc(doc.as<JsonVariantConst>(), errorMessage)) {
     applyDefaultSettings();
     wifiSsid = keepSsid;
     wifiPass = keepPass;
+    watchdogSeconds = keepWatchdog;
     saveSettings();
     return;
   }
@@ -814,6 +880,7 @@ String buildStatusJson() {
   doc["wifiSsid"] = wifiSsid;
   doc["pwmPin"] = LED_PWM_PIN;
   doc["pwmBrightness"] = currentBrightness;
+  doc["watchdogSeconds"] = watchdogSeconds;
 
   if (activeType == ACTIVE_NONE) {
     doc["activeRun"] = nullptr;
@@ -904,42 +971,47 @@ void checkAlarms() {
 
 void tryConnectWifi(bool force) {
   const unsigned long nowMs = millis();
-  if (!force && wifiConnected && WiFi.status() == WL_CONNECTED) {
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiConnected = true;
     return;
   }
+  wifiConnected = false;
   if (!force && (nowMs - lastWifiAttemptMs) < WIFI_RETRY_INTERVAL_MS && lastWifiAttemptMs != 0) {
     return;
   }
 
   lastWifiAttemptMs = nowMs;
   WiFi.mode(WIFI_STA);
-  WiFi.disconnect(true, true);
-  delay(100);
+  WiFi.setAutoReconnect(true);
   WiFi.begin(wifiSsid.c_str(), wifiPass.c_str());
-
-  const unsigned long startMs = millis();
-  while (WiFi.status() != WL_CONNECTED && (millis() - startMs) < WIFI_CONNECT_TIMEOUT_MS) {
-    delay(200);
-  }
-
-  wifiConnected = (WiFi.status() == WL_CONNECTED);
 }
 
 void trySyncNtp(bool force) {
-  const unsigned long nowMs = millis();
-  if (!force && ntpSynced &&
-      (nowMs - lastNtpAttemptMs) < (NTP_SYNC_INTERVAL_SECONDS * 1000UL)) {
-    return;
-  }
-  if (!wifiConnected || WiFi.status() != WL_CONNECTED) {
+  if (WiFi.status() != WL_CONNECTED) {
     return;
   }
 
-  lastNtpAttemptMs = nowMs;
-  configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
+  const unsigned long nowMs = millis();
+  if (!sntpStarted || force) {
+    configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
+    sntpStarted = true;
+    lastNtpAttemptMs = nowMs;
+  }
 
   struct tm nowTm;
-  ntpSynced = getLocalTime(&nowTm, 5000);
+  ntpSynced = getLocalTime(&nowTm, 0);
+  if (ntpSynced) {
+    if ((nowMs - lastNtpAttemptMs) >= (NTP_SYNC_INTERVAL_SECONDS * 1000UL)) {
+      configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
+      lastNtpAttemptMs = nowMs;
+    }
+    return;
+  }
+
+  if ((nowMs - lastNtpAttemptMs) >= WIFI_RETRY_INTERVAL_MS) {
+    configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
+    lastNtpAttemptMs = nowMs;
+  }
 }
 
 // --- HTTP ---
@@ -1175,10 +1247,10 @@ void handleBleCommandJson(const String& body) {
         pendingBleResponse = wrapBleError(requestId, errorMessage);
       } else {
         saveSettings();
+        applyWatchdog();
         if (wifiNeedsReconnect) {
           wifiNeedsReconnect = false;
           tryConnectWifi(true);
-          trySyncNtp(true);
         }
         pendingBleResponse = wrapBleSuccess(requestId, "null");
       }
@@ -1192,10 +1264,10 @@ void handleBleCommandJson(const String& body) {
       pendingBleResponse = wrapBleError(requestId, errorMessage);
     } else {
       saveSettings();
+      applyWatchdog();
       if (wifiNeedsReconnect) {
         wifiNeedsReconnect = false;
         tryConnectWifi(true);
-        trySyncNtp(true);
       }
       pendingBleResponse = wrapBleSuccess(requestId, "null");
     }
@@ -1345,6 +1417,8 @@ void processBleTick() {
 
 void setup() {
   Serial.begin(115200);
+  watchdogSeconds = DEFAULT_WATCHDOG_SECONDS;
+  applyWatchdog();
   delay(200);
   Serial.println();
   Serial.println("ambient-morning-alarm " + firmwareVersionString());
@@ -1352,25 +1426,25 @@ void setup() {
 
   setupLedPwm();
   loadSettings();
+  applyWatchdog();
 
   tryConnectWifi(true);
-  trySyncNtp(true);
   setupHttp();
   setupBluetooth();
-
-  if (wifiConnected) {
-    Serial.print("WiFi IP: ");
-    Serial.println(WiFi.localIP());
-  } else {
-    Serial.println("WiFi ne podklyuchen, BLE dostupen");
-  }
+  Serial.println("HTTP 80 podnyat, NTP v fone");
 }
 
 void loop() {
+  feedWatchdog();
+
   if (WiFi.status() != WL_CONNECTED) {
     wifiConnected = false;
     tryConnectWifi(false);
   } else {
+    if (!wifiConnected) {
+      Serial.print("WiFi IP: ");
+      Serial.println(WiFi.localIP());
+    }
     wifiConnected = true;
   }
 

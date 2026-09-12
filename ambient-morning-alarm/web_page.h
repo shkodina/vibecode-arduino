@@ -142,20 +142,23 @@ h2 { margin: 18px 0 8px; font-size: 1.2rem; }
     </div>
   </div>
 
-  <h2>WiFi</h2>
-  <div class="card" id="wifiCard"></div>
-
   <h2>Будильники</h2>
   <div id="alarms"></div>
-  <div class="row">
-    <button type="button" onclick="saveAll()">Сохранить настройки</button>
-  </div>
 
   <h2>Таймер</h2>
   <div class="card" id="timerCard"></div>
 
   <h2>Тест свечения</h2>
   <div class="card" id="testCard"></div>
+
+  <h2>WiFi</h2>
+  <div class="card" id="wifiCard"></div>
+
+  <h2>Watchdog</h2>
+  <div class="card" id="watchdogCard"></div>
+  <div class="row">
+    <button type="button" onclick="saveAll()">Сохранить настройки</button>
+  </div>
 </section>
 <script>
 var DAYS = ["Пн","Вт","Ср","Чт","Пт","Сб","Вс"];
@@ -289,6 +292,15 @@ function renderWifi() {
     '<div class="muted" style="margin-top:8px">Сохраняется в энергонезависимую память. После смены устройство переподключится к сети.</div>';
 }
 
+function renderWatchdog() {
+  var sec = settings && settings.watchdogSeconds != null ? settings.watchdogSeconds : 30;
+  document.getElementById("watchdogCard").innerHTML =
+    '<div class="row">' +
+      '<div class="field"><label>Таймаут, сек</label><input type="number" id="wdt_sec" min="5" max="120" value="'+sec+'"></div>' +
+    '</div>' +
+    '<div class="muted" style="margin-top:8px">Если прошивка зависнет дольше этого времени, контроллер перезагрузится. Заводское значение 30 с. Пишется в NVS вместе с настройками.</div>';
+}
+
 function renderAlarms() {
   var root = document.getElementById("alarms");
   root.innerHTML = "";
@@ -370,10 +382,13 @@ function collectSettings() {
   var th = Number(document.getElementById("t_h").value);
   var tm = Number(document.getElementById("t_m").value);
   if (th < 0 || th > 23 || tm < 0 || tm > 59) throw new Error("Таймер: время ожидания");
+  var wdt = Number(document.getElementById("wdt_sec").value);
+  if (wdt < 5 || wdt > 120) throw new Error("Watchdog: 5..120 секунд");
   return {
     wifi: { ssid: ssid, password: password },
     alarms: alarms,
-    timer: { hours: th, minutes: tm, mode: tMode }
+    timer: { hours: th, minutes: tm, mode: tMode },
+    watchdogSeconds: wdt
   };
 }
 
@@ -401,6 +416,7 @@ async function loadSettings() {
   renderAlarms();
   renderTimer();
   renderTest();
+  renderWatchdog();
 }
 
 async function saveAll() {

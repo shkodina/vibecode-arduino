@@ -4,7 +4,7 @@
 // Версия прошивки: статус "00.00.001", BLE-имя "piper-light-alarm-0000001".
 #define FIRMWARE_VERSION_MAJOR 0
 #define FIRMWARE_VERSION_MINOR 0
-#define FIRMWARE_VERSION_PATCH 4
+#define FIRMWARE_VERSION_PATCH 5
 
 #define BLUETOOTH_PIN "8888"
 #define BLUETOOTH_NAME_PREFIX "piper-light-alarm-"
@@ -30,10 +30,15 @@
 #define WIFI_CONNECT_TIMEOUT_MS 20000
 #define WIFI_RETRY_INTERVAL_MS 30000
 
+#define DEFAULT_WATCHDOG_SECONDS 30
+#define WATCHDOG_SECONDS_MIN 5
+#define WATCHDOG_SECONDS_MAX 120
+
 #define PREFERENCES_NAMESPACE "alarm"
 #define PREFERENCES_KEY_SETTINGS "settings"
 #define PREFERENCES_KEY_WIFI_SSID "wifiSsid"
 #define PREFERENCES_KEY_WIFI_PASS "wifiPass"
+#define PREFERENCES_KEY_WATCHDOG "watchdogSec"
 
 // Ограничения WiFi (стандарт IEEE 802.11).
 #define WIFI_SSID_MAX_LEN 32

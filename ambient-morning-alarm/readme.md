@@ -23,7 +23,16 @@
 5. После доработки сразу допиши сюда: версию, API, поля JSON, поведение
    веба, грабли. Иначе следующий агент снова полезет во все файлы.
 
-Текущая прошивка: **00.00.004**. BLE-имя: `piper-light-alarm-0000004`.
+Текущая прошивка: **00.00.005**. BLE-имя: `piper-light-alarm-0000005`.
+
+Что сделано в 00.00.005:
+
+- старт: PWM → настройки → WiFi.begin без ожидания → HTTP 80 → BLE;
+  NTP (`configTime`) в фоне, без `getLocalTime(..., 5000)` на старте;
+- аппаратный watchdog, заводские **30 с** (`DEFAULT_WATCHDOG_SECONDS`),
+  диапазон 5..120, поле `watchdogSeconds` в JSON и отдельный ключ NVS
+  `watchdogSec`; меняется через веб / `POST /api/settings` / BLE `setSettings`;
+- веб: WiFi внизу, watchdog в самом конце, общая «Сохранить настройки» рядом.
 
 Что сделано в 00.00.004:
 
@@ -95,16 +104,20 @@ PWM: GPIO4 (на шёлке платы «4») → `SIG` IRF520. Частота 5
 
 ## Что делает прошивка после старта
 
-1. Гасит ленту и поднимает PWM.
-2. Читает из Preferences (NVS) все сохранённые настройки: WiFi, будильники,
-   таймер. Если NVS пустая — берёт заводские значения, для WiFi это флаги
-   сборки `WIFI_SSID` / `WIFI_PASS`, и сразу пишет их в NVS.
-3. Подключается к WiFi из NVS (не из исходников).
-4. Синхронизирует время по NTP (`pool.ntp.org`, повтор раз в час).
-   Часовой пояс сейчас жёстко `GMT+3`, DST выключен.
-5. Поднимает HTTP на порту 80.
-6. Рекламирует BLE-имя из версии, сейчас `piper-light-alarm-0000004`.
-7. В цикле обслуживает веб, BLE, будильники и режимы света.
+1. Гасит ленту и сразу ставит watchdog на заводские 30 с.
+2. Читает из Preferences (NVS) настройки: WiFi, будильники, таймер, watchdog.
+   Если NVS пустая — берёт заводские значения, для WiFi это флаги сборки
+   `WIFI_SSID` / `WIFI_PASS`, и сразу пишет их в NVS. Потом перенастраивает
+   watchdog на значение из NVS.
+3. Стартует WiFi STA (`WiFi.begin`) **без ожидания** ассоциации.
+4. Поднимает HTTP на порту 80 сразу, не дожидаясь WiFi и NTP.
+5. Рекламирует BLE-имя из версии, сейчас `piper-light-alarm-0000005`.
+6. В цикле кормит watchdog, дожимает WiFi, синкает NTP в фоне
+   (`configTime` + опрос `getLocalTime` с нулевым таймаутом), обслуживает
+   веб, BLE, будильники и режимы света.
+
+NTP: `pool.ntp.org`. Если время уже есть — повтор `configTime` раз в час.
+Если ещё нет — повтор раз в 30 с. Часовой пояс жёстко `GMT+3`, DST выключен.
 
 После потери питания конфигурация сохраняется. Активный запуск света в момент
 отключения **не** продолжается: после включения лента гаснет и ждёт следующего
@@ -197,7 +210,8 @@ PWM: GPIO4 (на шёлке платы «4») → `SIG` IRF520. Частота 5
       "darkSeconds": 5,
       "totalSeconds": 600
     }
-  }
+  },
+  "watchdogSeconds": 30
 }
 ```
 
@@ -210,8 +224,8 @@ PWM: GPIO4 (на шёлке платы «4») → `SIG` IRF520. Частота 5
 - дни в `tm_wday` (0=вс) переводятся в эту маску функцией `weekdayBitFromTm`.
 
 NVS: namespace `alarm`. Ключ `settings` — весь JSON строкой. SSID/пароль
-ещё раз отдельно (`wifiSsid` / `wifiPass`), чтобы старые сохранения без
-объекта `wifi` не затирали сеть.
+ещё раз отдельно (`wifiSsid` / `wifiPass`), watchdog — `watchdogSec` (uint),
+чтобы старые сохранения без этих полей не затирали сеть и таймаут.
 
 ## Статус устройства
 
@@ -220,12 +234,13 @@ NVS: namespace `alarm`. Ключ `settings` — весь JSON строкой. SS
 ```json
 {
   "currentTime": "2026-09-12T10:15:00",
-  "firmwareVersion": "00.00.004",
+  "firmwareVersion": "00.00.005",
   "ntpSynced": true,
   "wifiConnected": true,
   "wifiSsid": "Home",
   "pwmPin": 4,
   "pwmBrightness": 0,
+  "watchdogSeconds": 30,
   "activeRun": null,
   "nextAlarm": {
     "id": 0,
@@ -253,16 +268,17 @@ NVS: namespace `alarm`. Ключ `settings` — весь JSON строкой. SS
   Сообщения «сохранено» / ошибки на несколько секунд перекрывают его,
   потом баннер снова показывает ближайший;
 - карточка активного запуска и «Стоп»;
-- WiFi SSID/пароль;
 - 10 будильников: время, дни, режим (`ramp` / `pulse` / `strobe`), поля pulse
   включая свечение и затухание. Для strobe видно только длительность.
   У каждого кнопка «Сохранить будильник N» → `POST /api/alarm` (другие
-  несохранённые карточки не перечитываются).
-  Общая кнопка «Сохранить настройки» по-прежнему пишет WiFi + все будильники +
-  таймер;
+  несохранённые карточки не перечитываются);
 - заголовок «Будильник N» оранжевый, пока стоит «включён» (меняется сразу
   по чекбоксу, до сохранения);
-- таймер и тест свечения.
+- таймер и тест свечения;
+- WiFi SSID/пароль — внизу страницы;
+- watchdog (таймаут 5..120 с) — в самом конце;
+- общая кнопка «Сохранить настройки» под watchdog пишет WiFi + все
+  будильники + таймер + watchdog.
 
 ## HTTP API
 
@@ -270,9 +286,10 @@ NVS: namespace `alarm`. Ключ `settings` — весь JSON строкой. SS
 CORS: `GET, POST, PATCH, OPTIONS`.
 
 - `GET /` — HTML
-- `GET /api/settings` — WiFi, будильники, таймер
-- `POST /api/settings` — сохранить всё (включая WiFi в NVS, затем
-  переподключение если SSID/пароль сменились)
+- `GET /api/settings` — WiFi, будильники, таймер, `watchdogSeconds`
+- `POST /api/settings` — сохранить всё (включая WiFi и watchdog в NVS, затем
+  переподключение если SSID/пароль сменились). Поле `watchdogSeconds`
+  опционально: если нет — текущее значение не трогаем.
 - `POST /api/alarm` и `PATCH /api/alarm` — один будильник, тело:
 
   ```json
@@ -300,14 +317,14 @@ CORS: `GET, POST, PATCH, OPTIONS`.
 Коды ошибок разбора: `invalid-json`, `alarms-missing`, `timer-missing`,
 `mode-missing`, `alarm-id-out-of-range`, `brightness-out-of-range`,
 `finish-less-than-start`, `duration-must-be-positive`,
-`pulse-dark-must-be-positive`, `wifi-ssid-invalid`, …
+`pulse-dark-must-be-positive`, `watchdog-out-of-range`, `wifi-ssid-invalid`, …
 
 ## Bluetooth LE
 
 ESP32-C3 не умеет Bluetooth Classic SPP, канал — BLE GATT.
 
-- Имя: `piper-light-alarm-` + major/minor/patch без точек. Для `00.00.004`
-  это `piper-light-alarm-0000004`
+- Имя: `piper-light-alarm-` + major/minor/patch без точек. Для `00.00.005`
+  это `piper-light-alarm-0000005`
 - PIN / passkey: `8888`
 - Service: `7c1b0000-7df0-4b6f-bc6f-a110c0000001`
 - Command write: `7c1b0001-7df0-4b6f-bc6f-a110c0000001`
@@ -332,7 +349,7 @@ Pairing зависит от телефона и стека ESP32 Arduino. Про
 ## Версия
 
 ```text
-00.00.004
+00.00.005
 ```
 
 Формат статуса: две цифры major, две minor, три patch. BLE-имя — те же цифры
@@ -383,17 +400,18 @@ nano .env
 
 ## Что проверить после заливки
 
-1. Serial: версия `00.00.004` и BLE-имя `piper-light-alarm-0000004`.
-2. WiFi IP в логе.
-3. `curl http://IP/api/status` — есть `nextAlarm` или `null`.
-4. Веб: баннер ближайшего, оранжевый заголовок у включённого, сохранить
-   один будильник, перезагрузить плату.
+1. Serial: версия `00.00.005` и BLE-имя `piper-light-alarm-0000005`. HTTP
+   должен отвечать сразу, не дожидаясь NTP.
+2. WiFi IP в логе после ассоциации (уже после подъёма HTTP).
+3. `curl http://IP/api/status` — `watchdogSeconds`, `nextAlarm` или `null`.
+4. Веб: баннер ближайшего, оранжевый заголовок у включённого, WiFi и
+   watchdog внизу, сохранить один будильник, перезагрузить плату.
 5. Тест `strobe` (по умолчанию 10 с), затем `pulse` со свечением и затуханием, затем стоп.
-6. BLE scanner: `piper-light-alarm-0000004`.
+6. BLE scanner: `piper-light-alarm-0000005`.
 
 ## Известные ограничения
 
-- Прошивка 00.00.004 залита 2026-09-12 на COM5 (esptool, Hash verified).
+- Прошивка 00.00.005 залита 2026-09-12 на COM5 (esptool, Hash verified).
 - Android APK ещё без `glowSeconds` / `fadeSeconds` / `strobe`. Если приложение
   сделает полный `setSettings` со старой схемой, прошивка запишет неизвестный
   `type` как `ramp` и обнулит свечение/затухание.
