@@ -4,13 +4,14 @@
 // Версия прошивки: статус "00.00.001", BLE-имя "piper-light-alarm-0000001".
 #define FIRMWARE_VERSION_MAJOR 0
 #define FIRMWARE_VERSION_MINOR 0
-#define FIRMWARE_VERSION_PATCH 8
+#define FIRMWARE_VERSION_PATCH 11
 
 #define BLUETOOTH_PIN "8888"
 #define BLUETOOTH_NAME_PREFIX "piper-light-alarm-"
 
 #define ALARM_COUNT 10
 #define BLE_INIT_STACK_SIZE 16384
+#define HTTP_TASK_STACK_SIZE 8192
 #define HTTP_PORT 80
 
 // Холодный старт с БП: не поднимать радио сразу — иначе brownout, GPIO снова Hi-Z, лента горит.
@@ -49,7 +50,7 @@
 #define WIFI_SSID_MAX_LEN 32
 #define WIFI_PASS_MAX_LEN 63
 
-#define STATUS_NOTIFY_INTERVAL_MS 2000
+#define STATUS_NOTIFY_INTERVAL_MS 10000
 #define BLE_CHUNK_SIZE 180
 
 // Дефолт ramp: медленный розжиг ~20 мин, всего 30 мин.

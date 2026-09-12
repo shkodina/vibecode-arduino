@@ -23,7 +23,24 @@
 5. После доработки сразу допиши сюда: версию, API, поля JSON, поведение
    веба, грабли. Иначе следующий агент снова полезет во все файлы.
 
-Текущая прошивка: **00.00.008**. BLE-имя: `piper-light-alarm-0000008`.
+Текущая прошивка: **00.00.011**. BLE-имя: `piper-light-alarm-0000011`.
+
+Что сделано в 00.00.011:
+
+- приложение: Connected на 2–5 с, потом Disconnected. Каждые 5 с
+  `ESP_COEX_PREFER_WIFI` глушил BLE. Убрано; при GATT — BALANCE, advertising
+  после disconnect с паузой 400 мс.
+
+Что сделано в 00.00.010:
+
+- веб снова пустой: BLE после pairing включает WiFi sleep, `/api/settings`
+  обрывается. HTTP в отдельной задаче, `WIFI_PS_NONE` + prefer WiFi каждые 5 с
+  и после BLE, notify статуса раз в 10 с.
+
+Что сделано в 00.00.009:
+
+- веб: HTML открывался, поля пустые («Загрузка...»). `WiFi.setSleep(true)`
+  ронял тело `/api/settings`. Sleep выключен, `Connection: close`, fetch 8 с.
 
 Что сделано в 00.00.008:
 
@@ -133,7 +150,7 @@ PWM: GPIO4 (на шёлке платы «4») → `SIG` IRF520. Частота 5
 5. HTTP на порту 80, сразу `loop()` / `handleClient`. Радио ещё не стартует.
 6. `WiFi.mode(WIFI_STA)` без associate (нужен lwIP для HTTP), сразу HTTP 80.
    Через 3 с: `WiFi.begin` (TX 8.5 dBm). Через 6 с: BLE
-   `piper-light-alarm-0000008` в задаче `bleinit`.
+   `piper-light-alarm-0000010` в задаче `bleinit`. WiFi sleep выключен.
 7. В цикле: watchdog, HTTP, WiFi, NTP в фоне, свет, будильники, BLE notify.
 
 NTP: `pool.ntp.org`. Если время уже есть — повтор `configTime` раз в час.
@@ -254,7 +271,7 @@ NVS: namespace `alarm`. Ключ `settings` — весь JSON строкой. SS
 ```json
 {
   "currentTime": "2026-09-12T10:15:00",
-  "firmwareVersion": "00.00.008",
+  "firmwareVersion": "00.00.011",
   "ntpSynced": true,
   "wifiConnected": true,
   "wifiSsid": "Home",
@@ -343,9 +360,9 @@ CORS: `GET, POST, PATCH, OPTIONS`.
 
 ESP32-C3 не умеет Bluetooth Classic SPP, канал — BLE GATT.
 
-- Имя: `piper-light-alarm-` + major/minor/patch без точек. Для `00.00.008`
-  это `piper-light-alarm-0000008`
-- PIN / passkey: `8888`
+- Имя: `piper-light-alarm-` + major/minor/patch без точек. Для `00.00.011`
+  это `piper-light-alarm-0000011`
+- PIN / passkey: `008888` (BLE всегда 6 цифр; в прошивке `8888`)
 - Service: `7c1b0000-7df0-4b6f-bc6f-a110c0000001`
 - Command write: `7c1b0001-7df0-4b6f-bc6f-a110c0000001`
 - Response notify/read: `7c1b0002-7df0-4b6f-bc6f-a110c0000001`
@@ -369,7 +386,7 @@ Pairing зависит от телефона и стека ESP32 Arduino. Про
 ## Версия
 
 ```text
-00.00.008
+00.00.011
 ```
 
 Формат статуса: две цифры major, две minor, три patch. BLE-имя — те же цифры
@@ -420,7 +437,7 @@ nano .env
 
 ## Что проверить после заливки
 
-1. Serial: версия `00.00.008` и BLE-имя `piper-light-alarm-0000008`. HTTP
+1. Serial: версия `00.00.010` и BLE-имя `piper-light-alarm-0000010`. HTTP
    должен отвечать сразу, не дожидаясь NTP и BLE. WiFi — через ~3 с.
 2. Холодный старт с БП на площадки 5V/GND: лента гаснет без RESET, веб
    через несколько секунд после WiFi.
@@ -428,13 +445,12 @@ nano .env
 4. Веб: баннер ближайшего, оранжевый заголовок у включённого, WiFi и
    watchdog внизу, сохранить один будильник, перезагрузить плату.
 5. Тест `strobe` (по умолчанию 10 с), затем `pulse` со свечением и затуханием, затем стоп.
-6. BLE scanner: `piper-light-alarm-0000008` (появляется примерно через 6 с).
+6. BLE scanner: `piper-light-alarm-0000011` (появляется примерно через 6 с).
 
 ## Известные ограничения
 
-- Прошивка 00.00.008: холодный старт с БП (5V/GND со стабилизатора). Если
-  лента всё ещё горит до RESET — это уже не приложение, а EN/ROM до setup;
-  тогда конденсатор 470–1000 µF на 5V у ESP и DC-DC ~5.15 В.
+- Прошивка 00.00.010: веб не должен висеть на «Загрузка...» при включённом BLE.
+  Холодный старт с БП: если лента горит до RESET — 10 кОм SIG–GND.
 - Android APK ещё без `glowSeconds` / `fadeSeconds` / `strobe`. Если приложение
   сделает полный `setSettings` со старой схемой, прошивка запишет неизвестный
   `type` как `ramp` и обнулит свечение/затухание.

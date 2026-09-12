@@ -393,21 +393,30 @@ function collectSettings() {
 }
 
 async function api(path, method, body) {
-  var opts = { method: method || "GET", headers: {} };
+  var ctrl = new AbortController();
+  var timer = setTimeout(function() { ctrl.abort(); }, 8000);
+  var opts = { method: method || "GET", headers: {}, signal: ctrl.signal, cache: "no-store" };
   if (body !== undefined) {
     opts.headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(body);
   }
-  var res = await fetch(path, opts);
-  var text = await res.text();
-  var data = {};
-  try { data = text ? JSON.parse(text) : {}; } catch (e) {
-    throw new Error("Ответ не JSON: HTTP " + res.status);
+  try {
+    var res = await fetch(path, opts);
+    var text = await res.text();
+    var data = {};
+    try { data = text ? JSON.parse(text) : {}; } catch (e) {
+      throw new Error("Ответ не JSON: HTTP " + res.status);
+    }
+    if (!res.ok || data.ok === false) {
+      throw new Error((data && data.error) || ("HTTP "+res.status));
+    }
+    return data;
+  } catch (e) {
+    if (e && e.name === "AbortError") throw new Error("Таймаут " + path);
+    throw e;
+  } finally {
+    clearTimeout(timer);
   }
-  if (!res.ok || data.ok === false) {
-    throw new Error((data && data.error) || ("HTTP "+res.status));
-  }
-  return data;
 }
 
 async function loadSettings() {
@@ -563,6 +572,7 @@ async function refreshStatus(forceKeepBanner) {
 }
 
 loadSettings().then(function() { return refreshStatus(true); }).catch(function(e) {
+  document.getElementById("statusMeta").textContent = "Ошибка загрузки: " + (e.message || e);
   showBanner(String(e.message || e), "error");
   renderTest();
 });

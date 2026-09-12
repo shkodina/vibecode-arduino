@@ -15,6 +15,8 @@
 #include <BLE2902.h>
 #include <BLESecurity.h>
 #include "esp_task_wdt.h"
+#include "esp_wifi.h"
+#include "esp_coexist.h"
 
 #include "config.h"
 #include "web_page.h"
@@ -973,6 +975,14 @@ void checkAlarms() {
   }
 }
 
+void keepWifiAwake() {
+  WiFi.setSleep(false);
+  esp_wifi_set_ps(WIFI_PS_NONE);
+  if (!bleClientConnected) {
+    esp_coex_preference_set(ESP_COEX_PREFER_WIFI);
+  }
+}
+
 void tryConnectWifi(bool force) {
   const unsigned long nowMs = millis();
   if (WiFi.status() == WL_CONNECTED) {
@@ -987,9 +997,9 @@ void tryConnectWifi(bool force) {
   lastWifiAttemptMs = nowMs;
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
-  WiFi.setSleep(true);
   WiFi.begin(wifiSsid.c_str(), wifiPass.c_str());
   WiFi.setTxPower(WIFI_POWER_8_5dBm);
+  keepWifiAwake();
 }
 
 void trySyncNtp(bool force) {
@@ -1026,6 +1036,7 @@ void sendJson(int code, const String& body) {
   server.sendHeader("Access-Control-Allow-Origin", "*");
   server.sendHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS");
   server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+  server.sendHeader("Connection", "close");
   server.send(code, "application/json", body);
 }
 
@@ -1051,6 +1062,7 @@ void handleOptions() {
 
 void handleRoot() {
   server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Connection", "close");
   server.send_P(200, "text/html; charset=utf-8", WEB_PAGE_HTML);
 }
 
@@ -1132,6 +1144,13 @@ void handleTestStart() {
 void handleTestStop() {
   stopActiveRun();
   sendOk();
+}
+
+void httpLoopTask(void* /*unused*/) {
+  for (;;) {
+    server.handleClient();
+    vTaskDelay(pdMS_TO_TICKS(2));
+  }
 }
 
 void setupHttp() {
@@ -1322,14 +1341,22 @@ class CommandCallbacks : public BLECharacteristicCallbacks {
   }
 };
 
+void restartBleAdvertisingTask(void* /*unused*/) {
+  vTaskDelay(pdMS_TO_TICKS(400));
+  BLEDevice::startAdvertising();
+  vTaskDelete(NULL);
+}
+
 class ServerCallbacks : public BLEServerCallbacks {
-  void onConnect(BLEServer* server) override {
+  void onConnect(BLEServer* /*server*/) override {
     bleClientConnected = true;
+    // Пока телефон в GATT, не отдавать RF целиком WiFi — иначе сессия падает через 1–5 с.
+    esp_coex_preference_set(ESP_COEX_PREFER_BALANCE);
   }
 
-  void onDisconnect(BLEServer* server) override {
+  void onDisconnect(BLEServer* /*server*/) override {
     bleClientConnected = false;
-    server->startAdvertising();
+    xTaskCreate(restartBleAdvertisingTask, "bleadv", 3072, nullptr, 1, nullptr);
   }
 };
 
@@ -1402,6 +1429,7 @@ void setupBluetooth() {
   advertising->setScanResponse(true);
   advertising->start();
   bleReady = true;
+  keepWifiAwake();
 }
 
 void bleInitTask(void* /*unused*/) {
@@ -1454,15 +1482,15 @@ void setup() {
   // begin() / associate по-прежнему через RADIO_START_DELAY_MS, чтобы не бить БП.
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
-  WiFi.setSleep(true);
+  keepWifiAwake();
 
   setupHttp();
+  xTaskCreate(httpLoopTask, "http", HTTP_TASK_STACK_SIZE, nullptr, 3, nullptr);
   Serial.println("HTTP 80 podnyat, WiFi.begin cherez 3s, BLE cherez 6s");
 }
 
 void loop() {
   feedWatchdog();
-  server.handleClient();
 
   const unsigned long nowMs = millis();
   if (nowMs >= RADIO_START_DELAY_MS) {
