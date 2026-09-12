@@ -4,7 +4,7 @@
 // Версия прошивки: статус "00.00.001", BLE-имя "piper-light-alarm-0000001".
 #define FIRMWARE_VERSION_MAJOR 0
 #define FIRMWARE_VERSION_MINOR 0
-#define FIRMWARE_VERSION_PATCH 3
+#define FIRMWARE_VERSION_PATCH 4
 
 #define BLUETOOTH_PIN "8888"
 #define BLUETOOTH_NAME_PREFIX "piper-light-alarm-"
@@ -56,6 +56,12 @@
 #define DEFAULT_PULSE_FADE_SECONDS 5
 #define DEFAULT_PULSE_DARK_SECONDS 5
 #define DEFAULT_PULSE_TOTAL_SECONDS 600
+
+// Стробоскоп: вспышка/пауза зашиты, снаружи только totalSeconds.
+#define STROBE_ON_MS 100
+#define STROBE_OFF_MS 100
+#define STROBE_BRIGHTNESS 100
+#define DEFAULT_STROBE_TOTAL_SECONDS 10
 
 // Дефолтные будильники: выключены, 07:00, Пн-Пт (биты 0..4).
 #define DEFAULT_ALARM_HOUR 7

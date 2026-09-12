@@ -33,7 +33,8 @@ bool wifiNeedsReconnect = false;
 
 enum LightModeType {
   LIGHT_MODE_RAMP,
-  LIGHT_MODE_PULSE
+  LIGHT_MODE_PULSE,
+  LIGHT_MODE_STROBE
 };
 
 struct LightModeConfig {
@@ -124,12 +125,21 @@ String bluetoothDeviceName() {
 }
 
 const char* modeTypeToString(LightModeType type) {
-  return type == LIGHT_MODE_PULSE ? "pulse" : "ramp";
+  if (type == LIGHT_MODE_PULSE) {
+    return "pulse";
+  }
+  if (type == LIGHT_MODE_STROBE) {
+    return "strobe";
+  }
+  return "ramp";
 }
 
 LightModeType modeTypeFromString(const char* value) {
   if (value != nullptr && strcmp(value, "pulse") == 0) {
     return LIGHT_MODE_PULSE;
+  }
+  if (value != nullptr && strcmp(value, "strobe") == 0) {
+    return LIGHT_MODE_STROBE;
   }
   return LIGHT_MODE_RAMP;
 }
@@ -286,6 +296,14 @@ uint8_t computeLightBrightness(unsigned long elapsedMs, const LightModeConfig& m
     return 0;
   }
 
+  if (mode.type == LIGHT_MODE_STROBE) {
+    const unsigned long onMs = max(1UL, static_cast<unsigned long>(STROBE_ON_MS));
+    const unsigned long offMs = max(1UL, static_cast<unsigned long>(STROBE_OFF_MS));
+    const unsigned long cycleMs = onMs + offMs;
+    const unsigned long phase = elapsedMs % cycleMs;
+    return phase < onMs ? static_cast<uint8_t>(STROBE_BRIGHTNESS) : 0;
+  }
+
   if (mode.type == LIGHT_MODE_RAMP) {
     const unsigned long rampMs = max(1UL, mode.rampSeconds * 1000UL);
     if (elapsedMs >= rampMs) {
@@ -332,7 +350,7 @@ void beginLightRun(ActiveRunType type, int8_t alarmId, const LightModeConfig& mo
   activeStartedMs = activeLightStartedMs;
   strncpy(activeStartedAt, formatLocalTimeIso().c_str(), sizeof(activeStartedAt) - 1);
   activeStartedAt[sizeof(activeStartedAt) - 1] = '\0';
-  setBrightnessPercent(mode.startBrightness);
+  setBrightnessPercent(computeLightBrightness(0, mode));
 }
 
 void updateLightEngine() {
@@ -395,7 +413,31 @@ bool startAlarmRun(const AlarmConfig& alarm) {
 
 // --- validation / JSON ---
 
+void normalizeMode(LightModeConfig& mode) {
+  if (mode.type == LIGHT_MODE_STROBE) {
+    mode.startBrightness = STROBE_BRIGHTNESS;
+    mode.finishBrightness = STROBE_BRIGHTNESS;
+    mode.rampSeconds = 0;
+    mode.glowSeconds = 0;
+    mode.fadeSeconds = 0;
+    mode.darkSeconds = 0;
+    return;
+  }
+  if (mode.type == LIGHT_MODE_RAMP) {
+    mode.glowSeconds = 0;
+    mode.fadeSeconds = 0;
+    mode.darkSeconds = 0;
+  }
+}
+
 bool validateMode(const LightModeConfig& mode, String& errorMessage) {
+  if (mode.totalSeconds == 0) {
+    errorMessage = "duration-must-be-positive";
+    return false;
+  }
+  if (mode.type == LIGHT_MODE_STROBE) {
+    return true;
+  }
   if (mode.startBrightness > 100 || mode.finishBrightness > 100) {
     errorMessage = "brightness-out-of-range";
     return false;
@@ -404,16 +446,13 @@ bool validateMode(const LightModeConfig& mode, String& errorMessage) {
     errorMessage = "finish-less-than-start";
     return false;
   }
-  if (mode.rampSeconds == 0 || mode.totalSeconds == 0) {
+  if (mode.rampSeconds == 0) {
     errorMessage = "duration-must-be-positive";
     return false;
   }
   if (mode.type == LIGHT_MODE_PULSE && mode.darkSeconds == 0) {
     errorMessage = "pulse-dark-must-be-positive";
     return false;
-  }
-  if (mode.type == LIGHT_MODE_RAMP && mode.darkSeconds != 0) {
-    // допускаем любое, но нормализуем позже; валидация по ТЗ: darkSeconds может быть 0
   }
   return true;
 }
@@ -466,11 +505,7 @@ bool modeFromJson(JsonObjectConst obj, LightModeConfig& mode, String& errorMessa
   mode.fadeSeconds = obj["fadeSeconds"] | 0;
   mode.darkSeconds = obj["darkSeconds"] | 0;
   mode.totalSeconds = obj["totalSeconds"] | 0;
-  if (mode.type == LIGHT_MODE_RAMP) {
-    mode.glowSeconds = 0;
-    mode.fadeSeconds = 0;
-    mode.darkSeconds = 0;
-  }
+  normalizeMode(mode);
   return validateMode(mode, errorMessage);
 }
 

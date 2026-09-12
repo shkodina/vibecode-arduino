@@ -192,20 +192,35 @@ function setBusy(on, label) {
 
 function modeFields(prefix, mode) {
   mode = mode || {type:"ramp", startBrightness:5, finishBrightness:100, rampSeconds:1200, glowSeconds:0, fadeSeconds:0, darkSeconds:0, totalSeconds:1800};
+  var isStrobe = mode.type === "strobe";
   return '' +
     '<div class="row">' +
-      '<div class="field"><label>Режим</label><select id="'+prefix+'_type">' +
+      '<div class="field"><label>Режим</label><select id="'+prefix+'_type" onchange="syncModeFields(\''+prefix+'\')">' +
         '<option value="ramp"'+(mode.type==="ramp"?" selected":"")+'>ramp</option>' +
         '<option value="pulse"'+(mode.type==="pulse"?" selected":"")+'>pulse</option>' +
+        '<option value="strobe"'+(isStrobe?" selected":"")+'>strobe</option>' +
       '</select></div>' +
-      '<div class="field"><label>Яркость старта %</label><input type="number" id="'+prefix+'_start" min="0" max="100" value="'+mode.startBrightness+'"></div>' +
-      '<div class="field"><label>Яркость финиша %</label><input type="number" id="'+prefix+'_finish" min="0" max="100" value="'+mode.finishBrightness+'"></div>' +
-      '<div class="field"><label>Розжиг, сек</label><input type="number" id="'+prefix+'_ramp" min="1" value="'+mode.rampSeconds+'"></div>' +
+      '<div class="field"><label>Всего, сек</label><input type="number" id="'+prefix+'_total" min="1" value="'+mode.totalSeconds+'"></div>' +
+    '</div>' +
+    '<div class="muted" id="'+prefix+'_strobeHint" style="margin-top:8px;display:'+(isStrobe?"block":"none")+'">Стробоскоп: вспышка 100 мс / пауза 100 мс, яркость 100%. Меняется только длительность.</div>' +
+    '<div class="row" id="'+prefix+'_extra" style="display:'+(isStrobe?"none":"flex")+';margin-top:10px">' +
+      '<div class="field"><label>Яркость старта %</label><input type="number" id="'+prefix+'_start" min="0" max="100" value="'+(mode.startBrightness != null ? mode.startBrightness : 5)+'"></div>' +
+      '<div class="field"><label>Яркость финиша %</label><input type="number" id="'+prefix+'_finish" min="0" max="100" value="'+(mode.finishBrightness != null ? mode.finishBrightness : 100)+'"></div>' +
+      '<div class="field"><label>Розжиг, сек</label><input type="number" id="'+prefix+'_ramp" min="1" value="'+(mode.rampSeconds != null && mode.rampSeconds > 0 ? mode.rampSeconds : 1)+'"></div>' +
       '<div class="field"><label>Свечение, сек</label><input type="number" id="'+prefix+'_glow" min="0" value="'+(mode.glowSeconds != null ? mode.glowSeconds : 0)+'"></div>' +
       '<div class="field"><label>Затухание, сек</label><input type="number" id="'+prefix+'_fade" min="0" value="'+(mode.fadeSeconds != null ? mode.fadeSeconds : 0)+'"></div>' +
-      '<div class="field"><label>Темнота, сек</label><input type="number" id="'+prefix+'_dark" min="0" value="'+mode.darkSeconds+'"></div>' +
-      '<div class="field"><label>Всего, сек</label><input type="number" id="'+prefix+'_total" min="1" value="'+mode.totalSeconds+'"></div>' +
+      '<div class="field"><label>Темнота, сек</label><input type="number" id="'+prefix+'_dark" min="0" value="'+(mode.darkSeconds != null ? mode.darkSeconds : 0)+'"></div>' +
     '</div>';
+}
+
+function syncModeFields(prefix) {
+  var typeEl = document.getElementById(prefix+"_type");
+  var extra = document.getElementById(prefix+"_extra");
+  var hint = document.getElementById(prefix+"_strobeHint");
+  if (!typeEl) return;
+  var strobe = typeEl.value === "strobe";
+  if (extra) extra.style.display = strobe ? "none" : "flex";
+  if (hint) hint.style.display = strobe ? "block" : "none";
 }
 
 function readMode(prefix) {
@@ -222,10 +237,20 @@ function readMode(prefix) {
 }
 
 function validateMode(mode) {
+  if (mode.totalSeconds <= 0) return "длительности должны быть > 0";
+  if (mode.type === "strobe") {
+    mode.startBrightness = 100;
+    mode.finishBrightness = 100;
+    mode.rampSeconds = 0;
+    mode.glowSeconds = 0;
+    mode.fadeSeconds = 0;
+    mode.darkSeconds = 0;
+    return "";
+  }
   if (mode.startBrightness < 0 || mode.startBrightness > 100) return "яркость старта 0..100";
   if (mode.finishBrightness < 0 || mode.finishBrightness > 100) return "яркость финиша 0..100";
   if (mode.finishBrightness < mode.startBrightness) return "финиш меньше старта";
-  if (mode.rampSeconds <= 0 || mode.totalSeconds <= 0) return "длительности должны быть > 0";
+  if (mode.rampSeconds <= 0) return "длительности должны быть > 0";
   if (mode.glowSeconds < 0 || mode.fadeSeconds < 0 || mode.darkSeconds < 0) return "длительности не могут быть < 0";
   if (mode.type === "pulse" && mode.darkSeconds <= 0) return "для pulse темнота > 0";
   if (mode.type === "ramp") {
@@ -302,7 +327,7 @@ function renderTimer() {
 
 function renderTest() {
   document.getElementById("testCard").innerHTML =
-    modeFields("x", {type:"pulse", startBrightness:10, finishBrightness:100, rampSeconds:3, glowSeconds:2, fadeSeconds:2, darkSeconds:2, totalSeconds:30}) +
+    modeFields("x", {type:"strobe", startBrightness:100, finishBrightness:100, rampSeconds:0, glowSeconds:0, fadeSeconds:0, darkSeconds:0, totalSeconds:10}) +
     '<div class="muted" style="margin-top:8px">PWM на GPIO'+(settings && settings.pwmPin ? settings.pwmPin : 4)+' (шёлк «4»). При тесте должен мигать и синий LED на плате.</div>' +
     '<div class="row" style="margin-top:12px">' +
       '<button type="button" onclick="startTest()">Старт</button>' +
