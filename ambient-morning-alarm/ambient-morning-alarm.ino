@@ -105,6 +105,12 @@ BLECharacteristic* bleStatusChar = nullptr;
 bool bleClientConnected = false;
 bool bleReady = false;
 bool bleStartAttempted = false;
+
+enum RadioMode {
+  RADIO_WIFI_ONLY,
+  RADIO_BLE_ONLY
+};
+RadioMode radioMode = RADIO_WIFI_ONLY;
 unsigned long lastStatusNotifyMs = 0;
 String pendingBleResponse;
 bool bleResponseReady = false;
@@ -129,6 +135,19 @@ String bluetoothDeviceName() {
            BLUETOOTH_NAME_PREFIX,
            FIRMWARE_VERSION_MAJOR, FIRMWARE_VERSION_MINOR, FIRMWARE_VERSION_PATCH);
   return String(buf);
+}
+
+const char* radioModeToString() {
+  return radioMode == RADIO_BLE_ONLY ? "ble" : "wifi";
+}
+
+void selectRadioMode() {
+  pinMode(RADIO_SELECT_BLE_PIN, INPUT_PULLUP);
+  pinMode(RADIO_SELECT_WIFI_PIN, INPUT_PULLUP);
+  delay(20);
+  const bool wantBle = digitalRead(RADIO_SELECT_BLE_PIN) == LOW;
+  const bool wantWifi = digitalRead(RADIO_SELECT_WIFI_PIN) == LOW;
+  radioMode = (wantBle && !wantWifi) ? RADIO_BLE_ONLY : RADIO_WIFI_ONLY;
 }
 
 const char* modeTypeToString(LightModeType type) {
@@ -881,6 +900,7 @@ String buildStatusJson() {
   JsonDocument doc;
   doc["currentTime"] = formatLocalTimeIso();
   doc["firmwareVersion"] = firmwareVersionString();
+  doc["radioMode"] = radioModeToString();
   doc["ntpSynced"] = ntpSynced;
   doc["wifiConnected"] = wifiConnected && (WiFi.status() == WL_CONNECTED);
   doc["wifiSsid"] = wifiSsid;
@@ -976,14 +996,17 @@ void checkAlarms() {
 }
 
 void keepWifiAwake() {
+  if (radioMode != RADIO_WIFI_ONLY) {
+    return;
+  }
   WiFi.setSleep(false);
   esp_wifi_set_ps(WIFI_PS_NONE);
-  if (!bleClientConnected) {
-    esp_coex_preference_set(ESP_COEX_PREFER_WIFI);
-  }
 }
 
 void tryConnectWifi(bool force) {
+  if (radioMode != RADIO_WIFI_ONLY) {
+    return;
+  }
   const unsigned long nowMs = millis();
   if (WiFi.status() == WL_CONNECTED) {
     wifiConnected = true;
@@ -1429,7 +1452,6 @@ void setupBluetooth() {
   advertising->setScanResponse(true);
   advertising->start();
   bleReady = true;
-  keepWifiAwake();
 }
 
 void bleInitTask(void* /*unused*/) {
@@ -1466,34 +1488,44 @@ void setup() {
   digitalWrite(ONBOARD_LED_PIN, LOW);
 #endif
 
+  selectRadioMode();
+
   Serial.begin(115200);
   watchdogSeconds = DEFAULT_WATCHDOG_SECONDS;
   applyWatchdog();
   delay(200);
   Serial.println();
   Serial.println("ambient-morning-alarm " + firmwareVersionString());
-  Serial.println("BLE name: " + bluetoothDeviceName());
+  Serial.print("radio mode: ");
+  Serial.println(radioModeToString());
+  if (radioMode == RADIO_BLE_ONLY) {
+    Serial.println("BLE name: " + bluetoothDeviceName());
+  }
 
   setupLedPwm();
   loadSettings();
   applyWatchdog();
 
-  // WebServer.begin() ходит в lwIP. Без WiFi.mode сокет берёт NULL mutex → assert и ребут.
-  // begin() / associate по-прежнему через RADIO_START_DELAY_MS, чтобы не бить БП.
-  WiFi.persistent(false);
-  WiFi.mode(WIFI_STA);
-  keepWifiAwake();
-
-  setupHttp();
-  xTaskCreate(httpLoopTask, "http", HTTP_TASK_STACK_SIZE, nullptr, 3, nullptr);
-  Serial.println("HTTP 80 podnyat, WiFi.begin cherez 3s, BLE cherez 6s");
+  if (radioMode == RADIO_WIFI_ONLY) {
+    WiFi.persistent(false);
+    WiFi.mode(WIFI_STA);
+    keepWifiAwake();
+    setupHttp();
+    xTaskCreate(httpLoopTask, "http", HTTP_TASK_STACK_SIZE, nullptr, 3, nullptr);
+    Serial.println("HTTP 80, WiFi.begin cherez 3s, BLE vyklyuchen");
+  } else {
+    WiFi.mode(WIFI_OFF);
+    bleStartAttempted = true;
+    xTaskCreate(bleInitTask, "bleinit", BLE_INIT_STACK_SIZE, nullptr, 1, nullptr);
+    Serial.println("BLE-only, WiFi vyklyuchen");
+  }
 }
 
 void loop() {
   feedWatchdog();
 
   const unsigned long nowMs = millis();
-  if (nowMs >= RADIO_START_DELAY_MS) {
+  if (radioMode == RADIO_WIFI_ONLY && nowMs >= RADIO_START_DELAY_MS) {
     if (WiFi.status() != WL_CONNECTED) {
       wifiConnected = false;
       tryConnectWifi(false);
@@ -1504,11 +1536,6 @@ void loop() {
       }
       wifiConnected = true;
     }
-  }
-
-  if (!bleStartAttempted && nowMs >= BLE_START_DELAY_MS) {
-    bleStartAttempted = true;
-    xTaskCreate(bleInitTask, "bleinit", BLE_INIT_STACK_SIZE, nullptr, 1, nullptr);
   }
 
   trySyncNtp(false);

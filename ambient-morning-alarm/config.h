@@ -4,7 +4,7 @@
 // Версия прошивки: статус "00.00.001", BLE-имя "piper-light-alarm-0000001".
 #define FIRMWARE_VERSION_MAJOR 0
 #define FIRMWARE_VERSION_MINOR 0
-#define FIRMWARE_VERSION_PATCH 11
+#define FIRMWARE_VERSION_PATCH 12
 
 #define BLUETOOTH_PIN "8888"
 #define BLUETOOTH_NAME_PREFIX "piper-light-alarm-"
@@ -14,9 +14,15 @@
 #define HTTP_TASK_STACK_SIZE 8192
 #define HTTP_PORT 80
 
-// Холодный старт с БП: не поднимать радио сразу — иначе brownout, GPIO снова Hi-Z, лента горит.
+// Режим радио при старте (INPUT_PULLUP, замыкание на GND).
+// Super Mini: ряд GND–5–6–7–8–10. Не GPIO8 (LED) и не GPIO9 (BOOT).
+// GPIO5 → GND = только BLE. GPIO6 → GND = только WiFi.
+// Ни одной / обе = только WiFi (одновременный WiFi+BLE на C3 не тянет).
+#define RADIO_SELECT_BLE_PIN 5
+#define RADIO_SELECT_WIFI_PIN 6
+
+// Холодный старт с БП: WiFi не сразу.
 #define RADIO_START_DELAY_MS 3000
-#define BLE_START_DELAY_MS 6000
 
 // На шёлке платы «4» = GPIO4. SIG модуль IRF520 сюда.
 #define LED_PWM_PIN 4

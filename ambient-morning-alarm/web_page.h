@@ -552,7 +552,9 @@ async function refreshStatus(forceKeepBanner) {
     var wifi = st.wifiConnected ? '<span class="ok">WiFi ok</span>' : '<span class="bad">WiFi нет</span>';
     var ntp = st.ntpSynced ? '<span class="ok">NTP ok</span>' : '<span class="bad">NTP нет</span>';
     document.getElementById("statusMeta").innerHTML =
-      st.currentTime + " · v" + st.firmwareVersion + " · " + wifi + " · " + ntp +
+      st.currentTime + " · v" + st.firmwareVersion + " · " +
+      (st.radioMode ? (st.radioMode + " · ") : "") +
+      wifi + " · " + ntp +
       (st.wifiSsid ? (" · " + st.wifiSsid) : "") +
       " · PWM GPIO" + (st.pwmPin != null ? st.pwmPin : "?") +
       " · яркость " + (st.pwmBrightness != null ? st.pwmBrightness : 0) + "%";
