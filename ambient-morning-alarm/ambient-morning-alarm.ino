@@ -41,6 +41,8 @@ struct LightModeConfig {
   uint8_t startBrightness;
   uint8_t finishBrightness;
   uint32_t rampSeconds;
+  uint32_t glowSeconds;
+  uint32_t fadeSeconds;
   uint32_t darkSeconds;
   uint32_t totalSeconds;
 };
@@ -138,6 +140,8 @@ LightModeConfig defaultRampMode() {
   mode.startBrightness = DEFAULT_RAMP_START_BRIGHTNESS;
   mode.finishBrightness = DEFAULT_RAMP_FINISH_BRIGHTNESS;
   mode.rampSeconds = DEFAULT_RAMP_SECONDS;
+  mode.glowSeconds = 0;
+  mode.fadeSeconds = 0;
   mode.darkSeconds = 0;
   mode.totalSeconds = DEFAULT_RAMP_TOTAL_SECONDS;
   return mode;
@@ -149,6 +153,8 @@ LightModeConfig defaultPulseMode() {
   mode.startBrightness = DEFAULT_PULSE_START_BRIGHTNESS;
   mode.finishBrightness = DEFAULT_PULSE_FINISH_BRIGHTNESS;
   mode.rampSeconds = DEFAULT_PULSE_RAMP_SECONDS;
+  mode.glowSeconds = DEFAULT_PULSE_GLOW_SECONDS;
+  mode.fadeSeconds = DEFAULT_PULSE_FADE_SECONDS;
   mode.darkSeconds = DEFAULT_PULSE_DARK_SECONDS;
   mode.totalSeconds = DEFAULT_PULSE_TOTAL_SECONDS;
   return mode;
@@ -291,15 +297,31 @@ uint8_t computeLightBrightness(unsigned long elapsedMs, const LightModeConfig& m
   }
 
   const unsigned long rampMs = max(1UL, mode.rampSeconds * 1000UL);
-  const unsigned long darkMs = mode.darkSeconds * 1000UL;
-  const unsigned long cycleMs = rampMs + max(1UL, darkMs);
+  const unsigned long glowMs = mode.glowSeconds * 1000UL;
+  const unsigned long fadeMs = mode.fadeSeconds * 1000UL;
+  const unsigned long darkMs = max(1UL, mode.darkSeconds * 1000UL);
+  const unsigned long cycleMs = rampMs + glowMs + fadeMs + darkMs;
   const unsigned long phase = elapsedMs % cycleMs;
-  if (phase >= rampMs) {
-    return 0;
+
+  if (phase < rampMs) {
+    const float t = static_cast<float>(phase) / static_cast<float>(rampMs);
+    const float delta = static_cast<float>(mode.finishBrightness - mode.startBrightness);
+    return static_cast<uint8_t>(mode.startBrightness + delta * t + 0.5f);
   }
-  const float t = static_cast<float>(phase) / static_cast<float>(rampMs);
-  const float delta = static_cast<float>(mode.finishBrightness - mode.startBrightness);
-  return static_cast<uint8_t>(mode.startBrightness + delta * t + 0.5f);
+
+  const unsigned long afterRamp = phase - rampMs;
+  if (afterRamp < glowMs) {
+    return mode.finishBrightness;
+  }
+
+  const unsigned long afterGlow = afterRamp - glowMs;
+  if (fadeMs > 0 && afterGlow < fadeMs) {
+    const float t = static_cast<float>(afterGlow) / static_cast<float>(fadeMs);
+    const float value = static_cast<float>(mode.finishBrightness) * (1.0f - t);
+    return static_cast<uint8_t>(value + 0.5f);
+  }
+
+  return 0;
 }
 
 void beginLightRun(ActiveRunType type, int8_t alarmId, const LightModeConfig& mode) {
@@ -425,6 +447,8 @@ void modeToJson(JsonObject obj, const LightModeConfig& mode) {
   obj["startBrightness"] = mode.startBrightness;
   obj["finishBrightness"] = mode.finishBrightness;
   obj["rampSeconds"] = mode.rampSeconds;
+  obj["glowSeconds"] = mode.glowSeconds;
+  obj["fadeSeconds"] = mode.fadeSeconds;
   obj["darkSeconds"] = mode.darkSeconds;
   obj["totalSeconds"] = mode.totalSeconds;
 }
@@ -438,12 +462,37 @@ bool modeFromJson(JsonObjectConst obj, LightModeConfig& mode, String& errorMessa
   mode.startBrightness = obj["startBrightness"] | 0;
   mode.finishBrightness = obj["finishBrightness"] | 0;
   mode.rampSeconds = obj["rampSeconds"] | 0;
+  mode.glowSeconds = obj["glowSeconds"] | 0;
+  mode.fadeSeconds = obj["fadeSeconds"] | 0;
   mode.darkSeconds = obj["darkSeconds"] | 0;
   mode.totalSeconds = obj["totalSeconds"] | 0;
   if (mode.type == LIGHT_MODE_RAMP) {
+    mode.glowSeconds = 0;
+    mode.fadeSeconds = 0;
     mode.darkSeconds = 0;
   }
   return validateMode(mode, errorMessage);
+}
+
+bool alarmFromJson(JsonObjectConst obj, AlarmConfig& alarm, String& errorMessage) {
+  if (obj.isNull()) {
+    errorMessage = "alarm-missing";
+    return false;
+  }
+  uint8_t id = obj["id"] | 255;
+  if (id >= ALARM_COUNT) {
+    errorMessage = "alarm-id-out-of-range";
+    return false;
+  }
+  alarm.id = id;
+  alarm.enabled = obj["enabled"] | false;
+  alarm.hour = obj["hour"] | 0;
+  alarm.minute = obj["minute"] | 0;
+  alarm.weekdaysMask = obj["weekdaysMask"] | 0;
+  if (!modeFromJson(obj["mode"].as<JsonObjectConst>(), alarm.mode, errorMessage)) {
+    return false;
+  }
+  return validateAlarm(alarm, errorMessage);
 }
 
 void settingsToJson(JsonDocument& doc) {
@@ -504,24 +553,11 @@ bool applySettingsFromDoc(JsonVariantConst root, String& errorMessage) {
 
   JsonArrayConst alarmArr = root["alarms"].as<JsonArrayConst>();
   for (JsonObjectConst alarmObj : alarmArr) {
-    uint8_t id = alarmObj["id"] | 255;
-    if (id >= ALARM_COUNT) {
-      errorMessage = "alarm-id-out-of-range";
-      return false;
-    }
     AlarmConfig alarm;
-    alarm.id = id;
-    alarm.enabled = alarmObj["enabled"] | false;
-    alarm.hour = alarmObj["hour"] | 0;
-    alarm.minute = alarmObj["minute"] | 0;
-    alarm.weekdaysMask = alarmObj["weekdaysMask"] | 0;
-    if (!modeFromJson(alarmObj["mode"].as<JsonObjectConst>(), alarm.mode, errorMessage)) {
+    if (!alarmFromJson(alarmObj, alarm, errorMessage)) {
       return false;
     }
-    if (!validateAlarm(alarm, errorMessage)) {
-      return false;
-    }
-    nextAlarms[id] = alarm;
+    nextAlarms[alarm.id] = alarm;
   }
 
   TimerConfig nextTimer;
@@ -664,6 +700,57 @@ bool updateTimerConfig(const TimerConfig& timer) {
   return true;
 }
 
+bool findNextAlarm(uint8_t& alarmId, struct tm& when, long& inSeconds) {
+  struct tm nowTm;
+  if (!localTimeNow(&nowTm)) {
+    return false;
+  }
+
+  struct tm nowCopy = nowTm;
+  const time_t nowEpoch = mktime(&nowCopy);
+  if (nowEpoch == static_cast<time_t>(-1)) {
+    return false;
+  }
+
+  bool found = false;
+  time_t bestEpoch = 0;
+
+  for (uint8_t i = 0; i < ALARM_COUNT; i++) {
+    if (!alarms[i].enabled || alarms[i].weekdaysMask == 0) {
+      continue;
+    }
+    for (int offset = 0; offset < 8; offset++) {
+      struct tm cand = nowTm;
+      cand.tm_mday += offset;
+      cand.tm_hour = alarms[i].hour;
+      cand.tm_min = alarms[i].minute;
+      cand.tm_sec = 0;
+      cand.tm_isdst = -1;
+      const time_t epoch = mktime(&cand);
+      if (epoch == static_cast<time_t>(-1) || epoch <= nowEpoch) {
+        continue;
+      }
+      const uint8_t bit = weekdayBitFromTm(cand.tm_wday);
+      if ((alarms[i].weekdaysMask & (1u << bit)) == 0) {
+        continue;
+      }
+      if (!found || epoch < bestEpoch) {
+        found = true;
+        bestEpoch = epoch;
+        alarmId = i;
+        when = cand;
+      }
+      break;
+    }
+  }
+
+  if (!found) {
+    return false;
+  }
+  inSeconds = static_cast<long>(bestEpoch - nowEpoch);
+  return true;
+}
+
 long remainingSecondsForActive() {
   if (activeType == ACTIVE_NONE) {
     return 0;
@@ -711,6 +798,26 @@ String buildStatusJson() {
     run["startedAt"] = activeStartedAt;
     run["remainingSeconds"] = remainingSecondsForActive();
     run["brightness"] = currentBrightness;
+  }
+
+  if (ntpSynced) {
+    uint8_t nextId = 0;
+    struct tm whenTm;
+    long inSeconds = 0;
+    if (findNextAlarm(nextId, whenTm, inSeconds)) {
+      JsonObject next = doc["nextAlarm"].to<JsonObject>();
+      next["id"] = nextId;
+      next["hour"] = alarms[nextId].hour;
+      next["minute"] = alarms[nextId].minute;
+      next["inSeconds"] = inSeconds;
+      char atBuf[32];
+      strftime(atBuf, sizeof(atBuf), "%Y-%m-%dT%H:%M:%S", &whenTm);
+      next["at"] = atBuf;
+    } else {
+      doc["nextAlarm"] = nullptr;
+    }
+  } else {
+    doc["nextAlarm"] = nullptr;
   }
 
   String out;
@@ -804,7 +911,7 @@ void trySyncNtp(bool force) {
 
 void sendJson(int code, const String& body) {
   server.sendHeader("Access-Control-Allow-Origin", "*");
-  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS");
   server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
   server.send(code, "application/json", body);
 }
@@ -824,7 +931,7 @@ void sendError(const String& errorMessage) {
 
 void handleOptions() {
   server.sendHeader("Access-Control-Allow-Origin", "*");
-  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS");
   server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
   server.send(204);
 }
@@ -842,6 +949,32 @@ void handlePostSettings() {
   String errorMessage;
   if (!applySettingsJson(server.arg("plain"), errorMessage)) {
     sendError(errorMessage);
+    return;
+  }
+  sendOk();
+}
+
+void handlePostAlarm() {
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, server.arg("plain"));
+  if (err) {
+    sendError("invalid-json");
+    return;
+  }
+
+  JsonObjectConst obj = doc.as<JsonObjectConst>();
+  if (doc["alarm"].is<JsonObjectConst>()) {
+    obj = doc["alarm"].as<JsonObjectConst>();
+  }
+
+  AlarmConfig alarm;
+  String errorMessage;
+  if (!alarmFromJson(obj, alarm, errorMessage)) {
+    sendError(errorMessage);
+    return;
+  }
+  if (!updateAlarm(alarm)) {
+    sendError("alarm-invalid");
     return;
   }
   sendOk();
@@ -893,6 +1026,9 @@ void setupHttp() {
   server.on("/api/settings", HTTP_OPTIONS, handleOptions);
   server.on("/api/settings", HTTP_GET, handleGetSettings);
   server.on("/api/settings", HTTP_POST, handlePostSettings);
+  server.on("/api/alarm", HTTP_OPTIONS, handleOptions);
+  server.on("/api/alarm", HTTP_POST, handlePostAlarm);
+  server.on("/api/alarm", HTTP_PATCH, handlePostAlarm);
   server.on("/api/status", HTTP_OPTIONS, handleOptions);
   server.on("/api/status", HTTP_GET, handleGetStatus);
   server.on("/api/stop", HTTP_OPTIONS, handleOptions);
@@ -1026,6 +1162,19 @@ void handleBleCommandJson(const String& body) {
         tryConnectWifi(true);
         trySyncNtp(true);
       }
+      pendingBleResponse = wrapBleSuccess(requestId, "null");
+    }
+  } else if (command == "setAlarm") {
+    String errorMessage;
+    JsonObjectConst payload = doc["payload"].as<JsonObjectConst>();
+    AlarmConfig alarm;
+    if (payload.isNull()) {
+      pendingBleResponse = wrapBleError(requestId, "payload-missing");
+    } else if (!alarmFromJson(payload, alarm, errorMessage)) {
+      pendingBleResponse = wrapBleError(requestId, errorMessage);
+    } else if (!updateAlarm(alarm)) {
+      pendingBleResponse = wrapBleError(requestId, errorMessage.length() ? errorMessage : "alarm-invalid");
+    } else {
       pendingBleResponse = wrapBleSuccess(requestId, "null");
     }
   } else if (command == "stop" || command == "stopTest") {
