@@ -106,7 +106,7 @@
 | Версия, пины, дефолты, NTP, лимиты | `config.h` | Константы. bump `FIRMWARE_VERSION_PATCH` вместе с BLE-именем. |
 | Свет, будильники, NVS, HTTP, BLE | `ambient-morning-alarm.ino` | Всё ядро в одном скетче. |
 | HTML/CSS/JS страницы | `web_page.h` | `WEB_PAGE_HTML` в `PROGMEM`, без CDN. |
-| Сборка и заливка | `sborka.sh` + `.env` | WiFi не в исходниках. |
+| Сборка и заливка | `zalit.sh`, `sborka.sh` + `.env` | WiFi не в исходниках. COM* через Windows esptool. |
 | Заводской WiFi | `.env.primer` → `.env` | `.env` в gitignore. |
 | Исходное ТЗ человека | `prompt` | Зачем проект вообще. |
 | Android | `../ambient-morning-alarm--apk/` | Отдельный проект. |
@@ -445,14 +445,20 @@ nano .env
 ## Сборка и заливка
 
 ```bash
-./sborka.sh           # только собрать
-./sborka.sh zalit     # собрать и залить
+./zalit.sh            # собрать и залить на PORT из .env
+./zalit.sh uzhe       # залить уже собранный bin без компиляции
+./sborka.sh           # только собрать (arduino-cli)
 ```
+
+`PORT=COM5` (WSL1): скрипт копирует `merged.bin` на диск C и шьёт
+Windows `python -m esptool`. Закрой Serial Monitor, иначе COM занят.
+`PORT=/dev/ttyACM0` — заливка через linux `arduino-cli upload`.
 
 В `.env`:
 
-- `REZHIM=linux` — `arduino-cli` в Linux/WSL
-- `REZHIM=wsl` — Windows `arduino-cli.exe` и COM-порт Windows
+- `PORT` — `COM5` для USB CDC этой платы, или linux-устройство
+- `REZHIM=linux` — `arduino-cli` в Linux/WSL (сборка `sborka.sh`)
+- `REZHIM=wsl` — Windows `arduino-cli.exe`
 
 Плата по умолчанию: `esp32:esp32:esp32c3:PartitionScheme=min_spiffs`
 (~1.9 MB под приложение: WiFi + BLE + веб не влезают в default 1.2 MB).
