@@ -4,7 +4,7 @@
 // Версия прошивки: статус "00.00.001", BLE-имя "piper-light-alarm-0000001".
 #define FIRMWARE_VERSION_MAJOR 0
 #define FIRMWARE_VERSION_MINOR 0
-#define FIRMWARE_VERSION_PATCH 13
+#define FIRMWARE_VERSION_PATCH 15
 
 #define BLUETOOTH_PIN "8888"
 #define BLUETOOTH_NAME_PREFIX "piper-light-alarm-"
@@ -24,11 +24,17 @@
 // Холодный старт с БП: WiFi не сразу.
 #define RADIO_START_DELAY_MS 3000
 
-// На шёлке платы «4» = GPIO4. SIG модуль IRF520 сюда.
+// На шёлке платы «4» = GPIO4. SIG MOSFET (LR7843) сюда.
+// Логический MOSFET с 3.3 В: глаз насыщается уже к ~10% линейного duty.
+// Процент в UI — воспринимаемая яркость:
+// duty = (p/100)^gamma * visualDuty * maxDuty.
+// 500 Гц / 12 бит — импульс на малых duty длиннее, чем при 5 кГц.
 #define LED_PWM_PIN 4
 #define LED_PWM_CHANNEL 0
-#define LED_PWM_FREQUENCY 5000
-#define LED_PWM_RESOLUTION_BITS 8
+#define LED_PWM_FREQUENCY 500
+#define LED_PWM_RESOLUTION_BITS 12
+#define LED_PWM_GAMMA 2.0f
+#define LED_PWM_VISUAL_DUTY 0.12f
 
 // Встроенный синий LED Super Mini (active LOW) — зеркало для проверки, что тест идёт.
 #define ONBOARD_LED_PIN 8

@@ -8,6 +8,7 @@
 #include <ArduinoJson.h>
 #include <time.h>
 #include <sys/time.h>
+#include <math.h>
 #include <inttypes.h>
 
 #include <BLEDevice.h>
@@ -95,7 +96,7 @@ unsigned long activeStartedMs = 0;
 unsigned long activeWaitUntilMs = 0;
 unsigned long activeLightStartedMs = 0;
 char activeStartedAt[32] = "";
-uint8_t currentBrightness = 0;
+float currentBrightness = 0.0f;
 
 int lastFiredMinuteKey[ALARM_COUNT];
 
@@ -347,29 +348,52 @@ void setupLedPwm() {
 #else
   digitalWrite(ONBOARD_LED_PIN, LOW);
 #endif
-  currentBrightness = 0;
+  currentBrightness = 0.0f;
 }
 
-uint32_t brightnessToDuty(uint8_t percent) {
-  if (percent > 100) {
-    percent = 100;
+int reportedBrightnessPercent() {
+  if (currentBrightness <= 0.0f) {
+    return 0;
+  }
+  const int rounded = static_cast<int>(currentBrightness + 0.5f);
+  if (rounded > 100) {
+    return 100;
+  }
+  return rounded;
+}
+
+uint32_t brightnessToDuty(float percent) {
+  if (percent <= 0.0f) {
+    return 0;
+  }
+  if (percent > 100.0f) {
+    percent = 100.0f;
   }
   const uint32_t maxDuty = (1u << LED_PWM_RESOLUTION_BITS) - 1u;
-  return (static_cast<uint32_t>(percent) * maxDuty) / 100u;
+  const float shaped = powf(percent / 100.0f, LED_PWM_GAMMA);
+  const float visualMax = LED_PWM_VISUAL_DUTY * static_cast<float>(maxDuty);
+  uint32_t duty = static_cast<uint32_t>(shaped * visualMax + 0.5f);
+  if (duty > maxDuty) {
+    duty = maxDuty;
+  }
+  return duty;
 }
 
-void setBrightnessPercent(uint8_t percent) {
-  if (percent > 100) {
-    percent = 100;
+void setBrightnessPercent(float percent) {
+  if (percent < 0.0f) {
+    percent = 0.0f;
+  }
+  if (percent > 100.0f) {
+    percent = 100.0f;
   }
   currentBrightness = percent;
   ledcWrite(LED_PWM_PIN, brightnessToDuty(percent));
 
   // Синий LED на плате: горит, когда лента > 0 — видно даже без MOSFET.
 #if ONBOARD_LED_ACTIVE_LOW
-  digitalWrite(ONBOARD_LED_PIN, percent > 0 ? LOW : HIGH);
+  digitalWrite(ONBOARD_LED_PIN, percent > 0.0f ? LOW : HIGH);
 #else
-  digitalWrite(ONBOARD_LED_PIN, percent > 0 ? HIGH : LOW);
+  digitalWrite(ONBOARD_LED_PIN, percent > 0.0f ? HIGH : LOW);
 #endif
 }
 
@@ -383,10 +407,20 @@ void stopActiveRun() {
   setBrightnessPercent(0);
 }
 
-uint8_t computeLightBrightness(unsigned long elapsedMs, const LightModeConfig& mode) {
+float interpolateBrightness(float start, float finish, float t) {
+  if (t <= 0.0f) {
+    return start;
+  }
+  if (t >= 1.0f) {
+    return finish;
+  }
+  return start + (finish - start) * t;
+}
+
+float computeLightBrightness(unsigned long elapsedMs, const LightModeConfig& mode) {
   const unsigned long totalMs = mode.totalSeconds * 1000UL;
   if (elapsedMs >= totalMs) {
-    return 0;
+    return 0.0f;
   }
 
   if (mode.type == LIGHT_MODE_STROBE) {
@@ -394,17 +428,19 @@ uint8_t computeLightBrightness(unsigned long elapsedMs, const LightModeConfig& m
     const unsigned long offMs = max(1UL, static_cast<unsigned long>(STROBE_OFF_MS));
     const unsigned long cycleMs = onMs + offMs;
     const unsigned long phase = elapsedMs % cycleMs;
-    return phase < onMs ? static_cast<uint8_t>(STROBE_BRIGHTNESS) : 0;
+    return phase < onMs ? static_cast<float>(STROBE_BRIGHTNESS) : 0.0f;
   }
+
+  const float start = static_cast<float>(mode.startBrightness);
+  const float finish = static_cast<float>(mode.finishBrightness);
 
   if (mode.type == LIGHT_MODE_RAMP) {
     const unsigned long rampMs = max(1UL, mode.rampSeconds * 1000UL);
     if (elapsedMs >= rampMs) {
-      return mode.finishBrightness;
+      return finish;
     }
     const float t = static_cast<float>(elapsedMs) / static_cast<float>(rampMs);
-    const float delta = static_cast<float>(mode.finishBrightness - mode.startBrightness);
-    return static_cast<uint8_t>(mode.startBrightness + delta * t + 0.5f);
+    return interpolateBrightness(start, finish, t);
   }
 
   const unsigned long rampMs = max(1UL, mode.rampSeconds * 1000UL);
@@ -416,23 +452,21 @@ uint8_t computeLightBrightness(unsigned long elapsedMs, const LightModeConfig& m
 
   if (phase < rampMs) {
     const float t = static_cast<float>(phase) / static_cast<float>(rampMs);
-    const float delta = static_cast<float>(mode.finishBrightness - mode.startBrightness);
-    return static_cast<uint8_t>(mode.startBrightness + delta * t + 0.5f);
+    return interpolateBrightness(start, finish, t);
   }
 
   const unsigned long afterRamp = phase - rampMs;
   if (afterRamp < glowMs) {
-    return mode.finishBrightness;
+    return finish;
   }
 
   const unsigned long afterGlow = afterRamp - glowMs;
   if (fadeMs > 0 && afterGlow < fadeMs) {
     const float t = static_cast<float>(afterGlow) / static_cast<float>(fadeMs);
-    const float value = static_cast<float>(mode.finishBrightness) * (1.0f - t);
-    return static_cast<uint8_t>(value + 0.5f);
+    return interpolateBrightness(finish, 0.0f, t);
   }
 
-  return 0;
+  return 0.0f;
 }
 
 void beginLightRun(ActiveRunType type, int8_t alarmId, const LightModeConfig& mode) {
@@ -931,7 +965,7 @@ String buildStatusJson() {
   doc["wifiConnected"] = wifiConnected && (WiFi.status() == WL_CONNECTED);
   doc["wifiSsid"] = wifiSsid;
   doc["pwmPin"] = LED_PWM_PIN;
-  doc["pwmBrightness"] = currentBrightness;
+  doc["pwmBrightness"] = reportedBrightnessPercent();
   doc["watchdogSeconds"] = watchdogSeconds;
 
   if (activeType == ACTIVE_NONE) {
@@ -951,7 +985,7 @@ String buildStatusJson() {
     run["mode"] = modeTypeToString(activeMode.type);
     run["startedAt"] = activeStartedAt;
     run["remainingSeconds"] = remainingSecondsForActive();
-    run["brightness"] = currentBrightness;
+    run["brightness"] = reportedBrightnessPercent();
   }
 
   if (ntpSynced) {
