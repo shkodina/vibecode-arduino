@@ -4,13 +4,18 @@
 // Версия прошивки: статус "00.00.001", BLE-имя "piper-light-alarm-0000001".
 #define FIRMWARE_VERSION_MAJOR 0
 #define FIRMWARE_VERSION_MINOR 0
-#define FIRMWARE_VERSION_PATCH 5
+#define FIRMWARE_VERSION_PATCH 8
 
 #define BLUETOOTH_PIN "8888"
 #define BLUETOOTH_NAME_PREFIX "piper-light-alarm-"
 
 #define ALARM_COUNT 10
+#define BLE_INIT_STACK_SIZE 16384
 #define HTTP_PORT 80
+
+// Холодный старт с БП: не поднимать радио сразу — иначе brownout, GPIO снова Hi-Z, лента горит.
+#define RADIO_START_DELAY_MS 3000
+#define BLE_START_DELAY_MS 6000
 
 // На шёлке платы «4» = GPIO4. SIG модуль IRF520 сюда.
 #define LED_PWM_PIN 4

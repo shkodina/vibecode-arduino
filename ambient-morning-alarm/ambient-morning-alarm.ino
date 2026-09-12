@@ -101,6 +101,8 @@ BLECharacteristic* bleCommandChar = nullptr;
 BLECharacteristic* bleResponseChar = nullptr;
 BLECharacteristic* bleStatusChar = nullptr;
 bool bleClientConnected = false;
+bool bleReady = false;
+bool bleStartAttempted = false;
 unsigned long lastStatusNotifyMs = 0;
 String pendingBleResponse;
 bool bleResponseReady = false;
@@ -288,6 +290,8 @@ int minuteKeyFromTm(const struct tm& nowTm) {
 // --- PWM / light ---
 
 void setupLedPwm() {
+  pinMode(LED_PWM_PIN, OUTPUT);
+  digitalWrite(LED_PWM_PIN, LOW);
   ledcAttach(LED_PWM_PIN, LED_PWM_FREQUENCY, LED_PWM_RESOLUTION_BITS);
   ledcWrite(LED_PWM_PIN, 0);
   pinMode(ONBOARD_LED_PIN, OUTPUT);
@@ -983,7 +987,9 @@ void tryConnectWifi(bool force) {
   lastWifiAttemptMs = nowMs;
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
+  WiFi.setSleep(true);
   WiFi.begin(wifiSsid.c_str(), wifiPass.c_str());
+  WiFi.setTxPower(WIFI_POWER_8_5dBm);
 }
 
 void trySyncNtp(bool force) {
@@ -1395,6 +1401,12 @@ void setupBluetooth() {
   advertising->addServiceUUID(BLE_SERVICE_UUID);
   advertising->setScanResponse(true);
   advertising->start();
+  bleReady = true;
+}
+
+void bleInitTask(void* /*unused*/) {
+  setupBluetooth();
+  vTaskDelete(NULL);
 }
 
 void processBleTick() {
@@ -1416,6 +1428,16 @@ void processBleTick() {
 }
 
 void setup() {
+  // Сразу закрыть MOSFET: до PWM GPIO4 Hi-Z, модуль IRF520 часто открывает ленту.
+  pinMode(LED_PWM_PIN, OUTPUT);
+  digitalWrite(LED_PWM_PIN, LOW);
+  pinMode(ONBOARD_LED_PIN, OUTPUT);
+#if ONBOARD_LED_ACTIVE_LOW
+  digitalWrite(ONBOARD_LED_PIN, HIGH);
+#else
+  digitalWrite(ONBOARD_LED_PIN, LOW);
+#endif
+
   Serial.begin(115200);
   watchdogSeconds = DEFAULT_WATCHDOG_SECONDS;
   applyWatchdog();
@@ -1428,28 +1450,40 @@ void setup() {
   loadSettings();
   applyWatchdog();
 
-  tryConnectWifi(true);
+  // WebServer.begin() ходит в lwIP. Без WiFi.mode сокет берёт NULL mutex → assert и ребут.
+  // begin() / associate по-прежнему через RADIO_START_DELAY_MS, чтобы не бить БП.
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(true);
+
   setupHttp();
-  setupBluetooth();
-  Serial.println("HTTP 80 podnyat, NTP v fone");
+  Serial.println("HTTP 80 podnyat, WiFi.begin cherez 3s, BLE cherez 6s");
 }
 
 void loop() {
   feedWatchdog();
+  server.handleClient();
 
-  if (WiFi.status() != WL_CONNECTED) {
-    wifiConnected = false;
-    tryConnectWifi(false);
-  } else {
-    if (!wifiConnected) {
-      Serial.print("WiFi IP: ");
-      Serial.println(WiFi.localIP());
+  const unsigned long nowMs = millis();
+  if (nowMs >= RADIO_START_DELAY_MS) {
+    if (WiFi.status() != WL_CONNECTED) {
+      wifiConnected = false;
+      tryConnectWifi(false);
+    } else {
+      if (!wifiConnected) {
+        Serial.print("WiFi IP: ");
+        Serial.println(WiFi.localIP());
+      }
+      wifiConnected = true;
     }
-    wifiConnected = true;
+  }
+
+  if (!bleStartAttempted && nowMs >= BLE_START_DELAY_MS) {
+    bleStartAttempted = true;
+    xTaskCreate(bleInitTask, "bleinit", BLE_INIT_STACK_SIZE, nullptr, 1, nullptr);
   }
 
   trySyncNtp(false);
-  server.handleClient();
   updateLightEngine();
   checkAlarms();
   processBleTick();
