@@ -6,7 +6,7 @@ import { colors, spacing } from '../theme';
 import { validateAlarm } from '../validation';
 
 export function AlarmsScreen() {
-  const { settings, setSettings, saveSettings, busy } = useDevice();
+  const { settings, setSettings, saveSettings, saveAlarm, busy } = useDevice();
   const [localError, setLocalError] = useState<string | null>(null);
 
   return (
@@ -16,12 +16,22 @@ export function AlarmsScreen() {
         <AlarmCard
           key={alarm.id}
           alarm={alarm}
+          busy={busy}
           onChange={(next) => {
             setSettings((prev) => {
               const alarms = [...prev.alarms];
               alarms[index] = next;
               return { ...prev, alarms };
             });
+          }}
+          onSave={(next) => {
+            const err = validateAlarm(next);
+            if (err) {
+              setLocalError(err);
+              return;
+            }
+            setLocalError(null);
+            void saveAlarm(next);
           }}
         />
       ))}
@@ -40,7 +50,7 @@ export function AlarmsScreen() {
           void saveSettings();
         }}
       >
-        <Text style={styles.btnText}>Сохранить</Text>
+        <Text style={styles.btnText}>Сохранить все</Text>
       </Pressable>
       <View style={{ height: 40 }} />
     </ScrollView>

@@ -1,8 +1,14 @@
 import type { AlarmConfig, LightModeConfig, TimerConfig } from './model/types';
 
 export function validateMode(mode: LightModeConfig): string | null {
-  if (mode.type !== 'ramp' && mode.type !== 'pulse') {
-    return 'Режим должен быть ramp или pulse';
+  if (mode.type !== 'ramp' && mode.type !== 'pulse' && mode.type !== 'strobe') {
+    return 'Режим должен быть ramp, pulse или strobe';
+  }
+  if (mode.totalSeconds <= 0) {
+    return 'totalSeconds > 0';
+  }
+  if (mode.type === 'strobe') {
+    return null;
   }
   if (mode.startBrightness < 0 || mode.startBrightness > 100) {
     return 'startBrightness: 0..100';
@@ -16,8 +22,8 @@ export function validateMode(mode: LightModeConfig): string | null {
   if (mode.rampSeconds <= 0) {
     return 'rampSeconds > 0';
   }
-  if (mode.totalSeconds <= 0) {
-    return 'totalSeconds > 0';
+  if (mode.glowSeconds < 0 || mode.fadeSeconds < 0) {
+    return 'glowSeconds и fadeSeconds >= 0';
   }
   if (mode.type === 'pulse' && mode.darkSeconds <= 0) {
     return 'для pulse: darkSeconds > 0';

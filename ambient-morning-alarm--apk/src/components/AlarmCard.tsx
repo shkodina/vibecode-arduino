@@ -8,9 +8,11 @@ import { ModeForm } from './ModeForm';
 type Props = {
   alarm: AlarmConfig;
   onChange: (alarm: AlarmConfig) => void;
+  onSave: (alarm: AlarmConfig) => void;
+  busy?: boolean;
 };
 
-export function AlarmCard({ alarm, onChange }: Props) {
+export function AlarmCard({ alarm, onChange, onSave, busy }: Props) {
   const toggleDay = (bit: number) => {
     const mask = alarm.weekdaysMask ^ (1 << bit);
     onChange({ ...alarm, weekdaysMask: mask });
@@ -19,7 +21,7 @@ export function AlarmCard({ alarm, onChange }: Props) {
   return (
     <View style={styles.card}>
       <View style={styles.header}>
-        <Text style={styles.title}>Будильник {alarm.id}</Text>
+        <Text style={[styles.title, alarm.enabled && styles.titleOn]}>Будильник {alarm.id}</Text>
         <Switch
           value={alarm.enabled}
           onValueChange={(enabled) => onChange({ ...alarm, enabled })}
@@ -57,6 +59,13 @@ export function AlarmCard({ alarm, onChange }: Props) {
         })}
       </View>
       <ModeForm mode={alarm.mode} onChange={(mode) => onChange({ ...alarm, mode })} />
+      <Pressable
+        style={[styles.save, busy && styles.saveDisabled]}
+        disabled={busy}
+        onPress={() => onSave(alarm)}
+      >
+        <Text style={styles.saveText}>Сохранить будильник {alarm.id}</Text>
+      </Pressable>
     </View>
   );
 }
@@ -72,7 +81,17 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  title: { color: colors.accent, fontSize: 18, fontWeight: '700' },
+  title: { color: colors.muted, fontSize: 18, fontWeight: '700' },
+  titleOn: { color: colors.accent },
+  save: {
+    backgroundColor: colors.accent,
+    borderRadius: 8,
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  saveDisabled: { opacity: 0.5 },
+  saveText: { color: '#111', fontWeight: '800', fontSize: 15 },
   row: { flexDirection: 'row', gap: spacing.sm },
   field: { flex: 1, gap: 4 },
   label: { color: colors.muted, fontSize: 12 },

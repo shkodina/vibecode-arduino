@@ -3,6 +3,8 @@ import { bleClient } from '../ble/AlarmBleClient';
 import {
   defaultLightMode,
   defaultSettings,
+  normalizeSettings,
+  type AlarmConfig,
   type BleClientState,
   type DeviceSettings,
   type DeviceStatus,
@@ -27,6 +29,7 @@ type DeviceContextValue = {
   connect: () => Promise<void>;
   loadSettings: () => Promise<void>;
   saveSettings: () => Promise<void>;
+  saveAlarm: (alarm: AlarmConfig) => Promise<void>;
   loadWifi: () => Promise<void>;
   saveWifi: () => Promise<void>;
   stop: () => Promise<void>;
@@ -44,7 +47,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<DeviceStatus | null>(bleClient.lastStatus);
   const [settings, setSettings] = useState<DeviceSettings>(defaultSettings());
   const [wifiDraft, setWifiDraft] = useState<WifiConfig>({ ssid: '', password: '' });
-  const [testMode, setTestMode] = useState<LightModeConfig>(defaultLightMode('pulse'));
+  const [testMode, setTestMode] = useState<LightModeConfig>(defaultLightMode('strobe'));
   const [busy, setBusy] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
 
@@ -68,12 +71,9 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           const response = await bleClient.sendBuilt(commands.getSettings());
           const payload = response.payload as DeviceSettings;
           if (payload?.alarms && payload?.timer) {
-            setSettings({
-              wifi: payload.wifi || { ssid: '', password: '' },
-              alarms: payload.alarms,
-              timer: payload.timer,
-            });
-            setWifiDraft(payload.wifi || { ssid: '', password: '' });
+            const next = normalizeSettings(payload);
+            setSettings(next);
+            setWifiDraft(next.wifi);
           }
           setBanner(null);
         } catch (e) {
@@ -105,12 +105,9 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         const response = await bleClient.sendBuilt(commands.getSettings());
         const payload = response.payload as DeviceSettings;
         if (payload?.alarms && payload?.timer) {
-          setSettings({
-            wifi: payload.wifi || { ssid: '', password: '' },
-            alarms: payload.alarms,
-            timer: payload.timer,
-          });
-          setWifiDraft(payload.wifi || { ssid: '', password: '' });
+          const next = normalizeSettings(payload);
+          setSettings(next);
+          setWifiDraft(next.wifi);
         }
       } else if (bleClient.stateMessage) {
         throw new Error(bleClient.stateMessage);
@@ -122,14 +119,9 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     await withBusy(async () => {
       const response = await bleClient.sendBuilt(commands.getSettings());
       const payload = response.payload as DeviceSettings;
-      setSettings({
-        wifi: payload.wifi || { ssid: '', password: '' },
-        alarms: payload.alarms,
-        timer: payload.timer,
-      });
-      if (payload.wifi) {
-        setWifiDraft(payload.wifi);
-      }
+      const next = normalizeSettings(payload);
+      setSettings(next);
+      setWifiDraft(next.wifi);
     });
   }, [withBusy]);
 
@@ -139,6 +131,13 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       await bleClient.refreshStatus();
     });
   }, [settings, withBusy]);
+
+  const saveAlarm = useCallback(async (alarm: AlarmConfig) => {
+    await withBusy(async () => {
+      await bleClient.sendBuilt(commands.setAlarm(alarm));
+      await bleClient.refreshStatus();
+    });
+  }, [withBusy]);
 
   const loadWifi = useCallback(async () => {
     await withBusy(async () => {
@@ -201,6 +200,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       connect,
       loadSettings,
       saveSettings,
+      saveAlarm,
       loadWifi,
       saveWifi,
       stop,
@@ -221,6 +221,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       connect,
       loadSettings,
       saveSettings,
+      saveAlarm,
       loadWifi,
       saveWifi,
       stop,

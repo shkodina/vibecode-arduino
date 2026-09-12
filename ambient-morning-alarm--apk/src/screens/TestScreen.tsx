@@ -12,7 +12,9 @@ export function TestScreen() {
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
       {localError ? <Text style={styles.error}>{localError}</Text> : null}
-      <Text style={styles.hint}>Тест не сохраняет параметры в настройки устройства.</Text>
+      <Text style={styles.hint}>
+        Тест не сохраняет параметры в настройки. По умолчанию стробоскоп 10 с, как в вебе.
+      </Text>
       <ModeForm mode={testMode} onChange={setTestMode} />
       <Pressable
         style={styles.btn}

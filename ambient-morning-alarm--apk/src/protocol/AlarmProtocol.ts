@@ -1,4 +1,4 @@
-import type { DeviceSettings, LightModeConfig, WifiConfig } from '../model/types';
+import type { AlarmConfig, DeviceSettings, LightModeConfig, WifiConfig } from '../model/types';
 
 let nextRequestId = 1;
 
@@ -23,6 +23,7 @@ export function buildCommand(
 export const commands = {
   getSettings: () => buildCommand('getSettings'),
   setSettings: (settings: DeviceSettings) => buildCommand('setSettings', settings),
+  setAlarm: (alarm: AlarmConfig) => buildCommand('setAlarm', alarm),
   getWifi: () => buildCommand('getWifi'),
   setWifi: (wifi: WifiConfig) => buildCommand('setWifi', wifi),
   getStatus: () => buildCommand('getStatus'),

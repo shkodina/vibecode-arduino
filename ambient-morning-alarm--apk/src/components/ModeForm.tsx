@@ -1,6 +1,6 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import type { LightModeConfig, LightModeType } from '../model/types';
+import { MODE_TYPES, modeForType, type LightModeConfig, type LightModeType } from '../model/types';
 import { colors, spacing } from '../theme';
 
 type Props = {
@@ -31,56 +31,90 @@ function NumberField({
   );
 }
 
+const TYPE_LABELS: Record<LightModeType, string> = {
+  ramp: 'ramp',
+  pulse: 'pulse',
+  strobe: 'строб',
+};
+
 export function ModeForm({ mode, onChange, forceType }: Props) {
   const type = forceType || mode.type;
+  const pulseOrRamp = type === 'pulse' || type === 'ramp';
+
   return (
     <View style={styles.wrap}>
       {!forceType ? (
         <View style={styles.row}>
-          {(['ramp', 'pulse'] as LightModeType[]).map((t) => (
+          {MODE_TYPES.map((t) => (
             <Pressable
               key={t}
               style={[styles.chip, type === t && styles.chipOn]}
-              onPress={() =>
-                onChange({
-                  ...mode,
-                  type: t,
-                  darkSeconds: t === 'ramp' ? 0 : Math.max(mode.darkSeconds, 1),
-                })
-              }
+              onPress={() => onChange(modeForType(mode, t))}
             >
-              <Text style={styles.chipText}>{t}</Text>
+              <Text style={styles.chipText}>{TYPE_LABELS[t]}</Text>
             </Pressable>
           ))}
         </View>
       ) : null}
-      <View style={styles.row}>
+
+      {type === 'strobe' ? (
+        <Text style={styles.hint}>
+          Стробоскоп: вспышка/пауза 100 мс, яркость 100%. Снаружи только длительность.
+        </Text>
+      ) : null}
+
+      {pulseOrRamp ? (
+        <>
+          <View style={styles.row}>
+            <NumberField
+              label="старт %"
+              value={mode.startBrightness}
+              onChange={(startBrightness) => onChange({ ...mode, type, startBrightness })}
+            />
+            <NumberField
+              label="финиш %"
+              value={mode.finishBrightness}
+              onChange={(finishBrightness) => onChange({ ...mode, type, finishBrightness })}
+            />
+          </View>
+          <View style={styles.row}>
+            <NumberField
+              label="розжиг, с"
+              value={mode.rampSeconds}
+              onChange={(rampSeconds) => onChange({ ...mode, type, rampSeconds })}
+            />
+            <NumberField
+              label="всего, с"
+              value={mode.totalSeconds}
+              onChange={(totalSeconds) => onChange({ ...mode, type, totalSeconds })}
+            />
+          </View>
+        </>
+      ) : (
         <NumberField
-          label="startBrightness"
-          value={mode.startBrightness}
-          onChange={(startBrightness) => onChange({ ...mode, type, startBrightness })}
-        />
-        <NumberField
-          label="finishBrightness"
-          value={mode.finishBrightness}
-          onChange={(finishBrightness) => onChange({ ...mode, type, finishBrightness })}
-        />
-      </View>
-      <View style={styles.row}>
-        <NumberField
-          label="rampSeconds"
-          value={mode.rampSeconds}
-          onChange={(rampSeconds) => onChange({ ...mode, type, rampSeconds })}
-        />
-        <NumberField
-          label="totalSeconds"
+          label="всего, с"
           value={mode.totalSeconds}
           onChange={(totalSeconds) => onChange({ ...mode, type, totalSeconds })}
         />
-      </View>
+      )}
+
+      {type === 'pulse' ? (
+        <View style={styles.row}>
+          <NumberField
+            label="свечение, с"
+            value={mode.glowSeconds}
+            onChange={(glowSeconds) => onChange({ ...mode, type, glowSeconds })}
+          />
+          <NumberField
+            label="затухание, с"
+            value={mode.fadeSeconds}
+            onChange={(fadeSeconds) => onChange({ ...mode, type, fadeSeconds })}
+          />
+        </View>
+      ) : null}
       {type === 'pulse' ? (
         <NumberField
-          label="darkSeconds"
+          label="темнота, с"
           value={mode.darkSeconds}
           onChange={(darkSeconds) => onChange({ ...mode, type, darkSeconds })}
         />
@@ -94,6 +128,7 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', gap: spacing.sm },
   field: { flex: 1, gap: 4 },
   label: { color: colors.muted, fontSize: 12 },
+  hint: { color: colors.muted, fontSize: 12, lineHeight: 16 },
   input: {
     backgroundColor: colors.input,
     borderColor: colors.border,

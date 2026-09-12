@@ -9,8 +9,13 @@ Android-приложение (React Native / Expo Dev Client) для настр�
 - подключается к GATT service прошивки;
 - показывает статус, активный запуск и кнопку «Остановить»;
 - экраны: **Будильники**, **Таймер**, **Тест**, **WiFi**;
-- команды: `getSettings`, `setSettings`, `getWifi`, `setWifi`, `getStatus`,
-  `setTime`, `stop`, `startTimer`, `startTest`, `stopTest`.
+- режимы: `ramp`, `pulse` (розжиг / свечение `glowSeconds` / затухание
+  `fadeSeconds` / темнота), `strobe` (только `totalSeconds`, вспышка 100 мс
+  в прошивке). Тест по умолчанию — стробоскоп 10 с;
+- у каждого будильника «Сохранить будильник N» → BLE `setAlarm`. Внизу —
+  «Сохранить все» (`setSettings`);
+- команды: `getSettings`, `setSettings`, `setAlarm`, `getWifi`, `setWifi`,
+  `getStatus`, `setTime`, `stop`, `startTimer`, `startTest`, `stopTest`.
   После connect приложение шлёт время телефона (`setTime` / unix epoch UTC).
 
 Облако, push, геолокация «для себя» и управление через интернет не используются.
