@@ -138,6 +138,12 @@ export class AlarmBleClient {
       const device = await connected.discoverAllServicesAndCharacteristics();
       this.device = device;
 
+      try {
+        await device.requestMTU(185);
+      } catch {
+        // Redmi/части стеков не умеют MTU — не фатально.
+      }
+
       this.responseSub = device.monitorCharacteristicForService(
         SERVICE_UUID,
         RESPONSE_UUID,
@@ -166,6 +172,8 @@ export class AlarmBleClient {
       });
 
       this.setState('Connected');
+      await new Promise((r) => setTimeout(r, 400));
+      await this.sendBuilt(commands.setTime());
       await this.refreshStatus();
     } catch (e) {
       const msg = e instanceof BleError ? e.message : String(e);

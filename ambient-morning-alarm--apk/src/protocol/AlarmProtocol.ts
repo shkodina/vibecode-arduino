@@ -26,6 +26,7 @@ export const commands = {
   getWifi: () => buildCommand('getWifi'),
   setWifi: (wifi: WifiConfig) => buildCommand('setWifi', wifi),
   getStatus: () => buildCommand('getStatus'),
+  setTime: () => buildCommand('setTime', { epoch: Math.floor(Date.now() / 1000) }),
   stop: () => buildCommand('stop'),
   startTimer: () => buildCommand('startTimer'),
   startTest: (mode: LightModeConfig) => buildCommand('startTest', mode),

@@ -7,6 +7,7 @@
 #include <Preferences.h>
 #include <ArduinoJson.h>
 #include <time.h>
+#include <sys/time.h>
 #include <inttypes.h>
 
 #include <BLEDevice.h>
@@ -112,6 +113,8 @@ enum RadioMode {
 };
 RadioMode radioMode = RADIO_WIFI_ONLY;
 unsigned long lastStatusNotifyMs = 0;
+String pendingBleCommand;
+bool bleCommandReady = false;
 String pendingBleResponse;
 bool bleResponseReady = false;
 
@@ -148,6 +151,29 @@ void selectRadioMode() {
   const bool wantBle = digitalRead(RADIO_SELECT_BLE_PIN) == LOW;
   const bool wantWifi = digitalRead(RADIO_SELECT_WIFI_PIN) == LOW;
   radioMode = (wantBle && !wantWifi) ? RADIO_BLE_ONLY : RADIO_WIFI_ONLY;
+}
+
+void applyTimezone() {
+  // POSIX: GMT-3 = UTC+3 (Москва), как GMT_OFFSET_SEC.
+  setenv("TZ", "GMT-3", 1);
+  tzset();
+}
+
+bool applyUnixTimeUtc(int64_t epoch, String& errorMessage) {
+  if (epoch < 1700000000LL || epoch > 2100000000LL) {
+    errorMessage = "time-out-of-range";
+    return false;
+  }
+  applyTimezone();
+  struct timeval tv;
+  tv.tv_sec = static_cast<time_t>(epoch);
+  tv.tv_usec = 0;
+  if (settimeofday(&tv, nullptr) != 0) {
+    errorMessage = "time-set-failed";
+    return false;
+  }
+  ntpSynced = true;
+  return true;
 }
 
 const char* modeTypeToString(LightModeType type) {
@@ -1332,6 +1358,22 @@ void handleBleCommandJson(const String& body) {
     } else {
       pendingBleResponse = wrapBleSuccess(requestId, "null");
     }
+  } else if (command == "setTime") {
+    String errorMessage;
+    JsonVariantConst payload = doc["payload"];
+    long epoch = 0;
+    if (payload.is<JsonObjectConst>()) {
+      epoch = payload["epoch"] | 0L;
+    } else if (!payload.isNull()) {
+      epoch = payload.as<long>();
+    }
+    if (epoch == 0) {
+      pendingBleResponse = wrapBleError(requestId, "payload-missing");
+    } else if (!applyUnixTimeUtc(static_cast<int64_t>(epoch), errorMessage)) {
+      pendingBleResponse = wrapBleError(requestId, errorMessage);
+    } else {
+      pendingBleResponse = wrapBleSuccess(requestId, "null");
+    }
   } else if (command == "stop" || command == "stopTest") {
     stopActiveRun();
     pendingBleResponse = wrapBleSuccess(requestId, "null");
@@ -1360,7 +1402,8 @@ class CommandCallbacks : public BLECharacteristicCallbacks {
     if (value.length() == 0) {
       return;
     }
-    handleBleCommandJson(value);
+    pendingBleCommand = value;
+    bleCommandReady = true;
   }
 };
 
@@ -1373,8 +1416,6 @@ void restartBleAdvertisingTask(void* /*unused*/) {
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* /*server*/) override {
     bleClientConnected = true;
-    // Пока телефон в GATT, не отдавать RF целиком WiFi — иначе сессия падает через 1–5 с.
-    esp_coex_preference_set(ESP_COEX_PREFER_BALANCE);
   }
 
   void onDisconnect(BLEServer* /*server*/) override {
@@ -1419,11 +1460,9 @@ void setupBluetooth() {
   BLEDevice::init(name.c_str());
   BLEDevice::setSecurityCallbacks(new SecurityCallbacks());
 
-  // ESP32 Arduino 3.x BLESecurity: static API + setPassKey(static, pin).
-  BLESecurity::setAuthenticationMode(true, true, true);
-  BLESecurity::setCapability(ESP_IO_CAP_OUT);
-  BLESecurity::setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
-  BLESecurity::setPassKey(true, static_cast<uint32_t>(atoi(BLUETOOTH_PIN)));
+  // Just Works: MITM/PIN роняет ble-plx (Connected → «соединение потеряно»).
+  BLESecurity::setAuthenticationMode(false, false, false);
+  BLESecurity::setCapability(ESP_IO_CAP_NONE);
 
   bleServer = BLEDevice::createServer();
   bleServer->setCallbacks(new ServerCallbacks());
@@ -1460,6 +1499,13 @@ void bleInitTask(void* /*unused*/) {
 }
 
 void processBleTick() {
+  if (bleCommandReady) {
+    bleCommandReady = false;
+    const String cmd = pendingBleCommand;
+    pendingBleCommand = "";
+    handleBleCommandJson(cmd);
+  }
+
   if (bleResponseReady) {
     bleResponseReady = false;
     sendBleResponseChunked(pendingBleResponse);
@@ -1489,6 +1535,7 @@ void setup() {
 #endif
 
   selectRadioMode();
+  applyTimezone();
 
   Serial.begin(115200);
   watchdogSeconds = DEFAULT_WATCHDOG_SECONDS;

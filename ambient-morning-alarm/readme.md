@@ -23,7 +23,14 @@
 5. После доработки сразу допиши сюда: версию, API, поля JSON, поведение
    веба, грабли. Иначе следующий агент снова полезет во все файлы.
 
-Текущая прошивка: **00.00.012**. BLE-имя: `piper-light-alarm-0000012`.
+Текущая прошивка: **00.00.013**. BLE-имя: `piper-light-alarm-0000013`.
+
+Что сделано в 00.00.013:
+
+- BLE Just Works (без MITM/PIN): приложение больше не должно отваливаться
+  сразу после Connected. Команды GATT обрабатываются в `loop`, не в onWrite.
+- `setTime` `{ "epoch": <unix UTC> }` — часы с телефона, будильники без NTP.
+  `ntpSynced` становится true после успешного setTime.
 
 Что сделано в 00.00.012:
 
@@ -287,7 +294,7 @@ NVS: namespace `alarm`. Ключ `settings` — весь JSON строкой. SS
 ```json
 {
   "currentTime": "2026-09-12T10:15:00",
-  "firmwareVersion": "00.00.012",
+  "firmwareVersion": "00.00.013",
   "radioMode": "wifi",
   "ntpSynced": true,
   "wifiConnected": true,
@@ -379,7 +386,7 @@ ESP32-C3 не умеет Bluetooth Classic SPP, канал — BLE GATT.
 
 - Имя: `piper-light-alarm-` + major/minor/patch без точек. Для `00.00.011`
   это `piper-light-alarm-0000011`
-- PIN / passkey: `008888` (BLE всегда 6 цифр; в прошивке `8888`)
+- PIN / passkey: не требуется (Just Works с 00.00.013). Старый `008888` можно забыть.
 - Service: `7c1b0000-7df0-4b6f-bc6f-a110c0000001`
 - Command write: `7c1b0001-7df0-4b6f-bc6f-a110c0000001`
 - Response notify/read: `7c1b0002-7df0-4b6f-bc6f-a110c0000001`
@@ -403,7 +410,7 @@ Pairing зависит от телефона и стека ESP32 Arduino. Про
 ## Версия
 
 ```text
-00.00.012
+00.00.013
 ```
 
 Формат статуса: две цифры major, две minor, три patch. BLE-имя — те же цифры

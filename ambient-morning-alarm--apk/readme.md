@@ -10,7 +10,8 @@ Android-приложение (React Native / Expo Dev Client) для настр�
 - показывает статус, активный запуск и кнопку «Остановить»;
 - экраны: **Будильники**, **Таймер**, **Тест**, **WiFi**;
 - команды: `getSettings`, `setSettings`, `getWifi`, `setWifi`, `getStatus`,
-  `stop`, `startTimer`, `startTest`, `stopTest`.
+  `setTime`, `stop`, `startTimer`, `startTest`, `stopTest`.
+  После connect приложение шлёт время телефона (`setTime` / unix epoch UTC).
 
 Облако, push, геолокация «для себя» и управление через интернет не используются.
 
@@ -154,7 +155,8 @@ docker run --rm \
 3. Установи APK.
 4. При первом запуске выдай Bluetooth-разрешения.
 5. Нажми «Подключить» — приложение найдёт `piper-light-alarm-*`.
-6. Если телефон спросит PIN BLE — `8888` (из `config.h` прошивки).
+6. Если телефон спросит PIN BLE — не нужен (Just Works с 00.00.013). Старые
+   сопряжения `piper-light-alarm-*` лучше забыть.
 
 ## Ключ подписи
 
