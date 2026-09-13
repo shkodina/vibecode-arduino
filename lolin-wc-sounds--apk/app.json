@@ -1,0 +1,63 @@
+{
+  "expo": {
+    "name": "WC Sounds",
+    "slug": "lolin-wc-sounds",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "scheme": "lolin-wc-sounds",
+    "newArchEnabled": false,
+    "plugins": [
+      "expo-dev-client",
+      "expo-document-picker",
+      [
+        "@nikhil-cephei/ffmpeg-kit-react-native",
+        {
+          "subspec": "full-gpl"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 24,
+            "targetSdkVersion": 35,
+            "compileSdkVersion": 36,
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ],
+    "android": {
+      "package": "local.piper.lolinwcsounds",
+      "versionCode": 1,
+      "newArchEnabled": false,
+      "usesCleartextTraffic": true,
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.ACCESS_WIFI_STATE"
+      ],
+      "blockedPermissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.POST_NOTIFICATIONS"
+      ],
+      "predictiveBackGestureEnabled": false
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "local.piper.lolinwcsounds"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "local-lolin-wc-sounds"
+      }
+    }
+  }
+}
